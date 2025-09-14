@@ -2,7 +2,7 @@
 // @name         [Instagram] Image Extractor
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://static.cdninstagram.com/rsrc.php/y4/r/QaBlI0OZiks.ico
-// @version      1.1
+// @version      1.2
 // @description  Adds buttons to Instagram posts to open or download the highest resolution images (including stories)
 // @author       Xiv
 // @match        *://*.instagram.com/*
@@ -62,6 +62,15 @@
         return result;
     }
 
+    // Check if current page is a profile page
+    function isProfilePage() {
+        const path = window.location.pathname;
+        // Profile pages have patterns like: /username/ or /username/tagged/ or /username/reels/ etc.
+        // But NOT /p/postid/ or /reel/postid/ or /stories/username/
+        const profilePattern = /^\/[^\/]+\/?(?:tagged|reels|saved)?\/?\s*$/;
+        return profilePattern.test(path) && !path.startsWith('/p/') && !path.startsWith('/reel/') && !path.startsWith('/stories/');
+    }
+
     // Get the highest resolution image from srcset or fallback to src
     function getHighestResImage(img) {
         if (img.srcset) {
@@ -93,6 +102,9 @@
     function isPostMedia(element) {
         const src = element.src || '';
         if (!src) return false;
+
+        // Skip if we're on a profile page (grid view)
+        if (isProfilePage()) return false;
 
         // Skip if element is not visible
         if (!element.offsetParent) return false;
@@ -273,6 +285,18 @@
         childList: true,
         subtree: true
     });
+
+    // Listen for navigation changes (Instagram is a SPA)
+    let currentPath = window.location.pathname;
+    setInterval(() => {
+        if (window.location.pathname !== currentPath) {
+            currentPath = window.location.pathname;
+            // Remove all buttons when navigating to a new page
+            removeOldButtons();
+            // Re-evaluate after navigation
+            setTimeout(debouncedAddButtons, 300);
+        }
+    }, 500);
 
     console.log('Instagram High-Res Image Button script loaded successfully! Now supports images only.');
 })();
