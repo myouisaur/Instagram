@@ -1,7 +1,8 @@
 // ==UserScript==
 // @name         [Instagram] Image Extractor
 // @namespace    https://github.com/myouisaur/Instagram
-// @version      1.0
+// @icon         https://static.cdninstagram.com/rsrc.php/y4/r/QaBlI0OZiks.ico
+// @version      1.1
 // @description  Adds buttons to Instagram posts to open or download the highest resolution images (including stories)
 // @author       Xiv
 // @match        *://*.instagram.com/*
