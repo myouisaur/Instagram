@@ -2,7 +2,7 @@
 // @name         [Instagram] Image Extractor
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://static.cdninstagram.com/rsrc.php/y4/r/QaBlI0OZiks.ico
-// @version      1.6
+// @version      1.7
 // @description  Adds buttons to Instagram posts to open or download the highest resolution images (including stories)
 // @author       Xiv
 // @match        *://*.instagram.com/*
@@ -22,7 +22,9 @@
             right: 12px !important;
             display: flex !important;
             gap: 6px;
-            z-index: 9999 !important;
+            z-index: 999999;
+            opacity: 1;
+            pointer-events: auto;
         }
         .ig-story-btn-container {
             position: absolute !important;
@@ -31,30 +33,24 @@
             transform: translateX(-50%) !important;
             display: flex !important;
             gap: 6px;
-            z-index: 9999 !important;
+            z-index: 999999;
+            opacity: 1;
+            pointer-events: auto;
         }
         .ig-highres-btn {
             width: 36px;
             height: 36px;
-            background: rgba(0, 0, 0, 0.4);
-            backdrop-filter: blur(8px);
+            background: rgba(0,0,0,0.4);
+            backdrop-filter: blur(6px);
             color: white;
-            border-radius: 8px;
+            border-radius: 10px;
             cursor: pointer;
-            border: 1.5px solid rgba(255, 255, 255, 0.1);
-            display: flex !important;
+            border: 1px solid rgba(255,255,255,0.1);
+            display: flex;
             align-items: center;
             justify-content: center;
-            user-select: none;
-            pointer-events: auto !important;
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            font-size: 16px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-            flex-shrink: 0;
-        }
-        .ig-highres-btn:active {
-            opacity: 0.8;
+            font-size: 15px;
+            box-shadow: 0 6px 18px rgba(0,0,0,0.2);
         }
     `;
 
