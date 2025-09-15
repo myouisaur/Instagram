@@ -2,7 +2,7 @@
 // @name         [Instagram] Image Extractor
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://static.cdninstagram.com/rsrc.php/y4/r/QaBlI0OZiks.ico
-// @version      1.3
+// @version      1.6
 // @description  Adds buttons to Instagram posts to open or download the highest resolution images (including stories)
 // @author       Xiv
 // @match        *://*.instagram.com/*
@@ -16,7 +16,7 @@
 
     // CSS styles for the buttons
     const BUTTON_CSS = `
-        .ig-btn-container {
+        .ig-feed-btn-container {
             position: absolute !important;
             top: 12px !important;
             right: 12px !important;
@@ -24,15 +24,24 @@
             gap: 6px;
             z-index: 9999 !important;
         }
+        .ig-story-btn-container {
+            position: absolute !important;
+            bottom: 14px !important;
+            left: 50% !important;
+            transform: translateX(-50%) !important;
+            display: flex !important;
+            gap: 6px;
+            z-index: 9999 !important;
+        }
         .ig-highres-btn {
             width: 36px;
             height: 36px;
-            background: rgba(0, 0, 0, 0.75);
+            background: rgba(0, 0, 0, 0.4);
             backdrop-filter: blur(8px);
             color: white;
             border-radius: 8px;
             cursor: pointer;
-            border: 1.5px solid rgba(255, 255, 255, 0.2);
+            border: 1.5px solid rgba(255, 255, 255, 0.1);
             display: flex !important;
             align-items: center;
             justify-content: center;
@@ -41,7 +50,7 @@
             transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             font-size: 16px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
             flex-shrink: 0;
         }
         .ig-highres-btn:active {
@@ -69,6 +78,21 @@
         // But NOT /p/postid/ or /reel/postid/ or /stories/username/
         const profilePattern = /^\/[^\/]+\/?(?:tagged|reels|saved)?\/?\s*$/;
         return profilePattern.test(path) && !path.startsWith('/p/') && !path.startsWith('/reel/') && !path.startsWith('/stories/');
+    }
+
+    // Check if element is in a story context
+    function isStoryContext(element) {
+        // Check URL for stories path
+        if (window.location.pathname.includes('/stories/')) return true;
+
+        // Check for story-specific containers
+        if (element.closest('[data-testid="story-viewer"]') ||
+            element.closest('[role="dialog"]') && window.location.pathname.includes('/stories/') ||
+            element.closest('section') && element.closest('section').querySelector('[data-testid*="story"]')) {
+            return true;
+        }
+
+        return false;
     }
 
     // Get the highest resolution image from srcset or fallback to src
@@ -140,36 +164,83 @@
     // Get media type and appropriate filename
     function getMediaInfo(element) {
         const randomStr = generateRandomString(15);
+        const isStory = isStoryContext(element);
+        const prefix = isStory ? 'instagram-story' : 'instagram-image';
+
         return {
             type: 'image',
-            filename: `instagram-image-${randomStr}.jpg`,
-            url: getHighestResImage(element)
+            filename: `${prefix}-${randomStr}.jpg`,
+            url: getHighestResImage(element),
+            isStory: isStory
         };
     }
 
     // Remove old buttons to prevent duplicates
     function removeOldButtons() {
-        document.querySelectorAll('.ig-btn-container').forEach(container => container.remove());
+        document.querySelectorAll('.ig-feed-btn-container, .ig-story-btn-container').forEach(container => container.remove());
     }
 
-    // Download media function
+    // Download media function with JPG conversion
     function downloadMedia(url, filename) {
-        fetch(url)
-            .then(response => response.blob())
-            .then(blob => {
-                const link = document.createElement('a');
-                link.href = URL.createObjectURL(blob);
-                link.download = filename;
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-                URL.revokeObjectURL(link.href);
-            })
-            .catch(error => {
-                console.log('Download failed, opening in new tab instead:', error);
-                // Fallback to opening in new tab if download fails
-                window.open(url, '_blank', 'noopener,noreferrer');
-            });
+        // Convert to highest quality JPG before downloading
+        const img = new Image();
+        img.crossOrigin = 'anonymous'; // Handle CORS
+
+        img.onload = function() {
+            // Create canvas for conversion
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+
+            // Set canvas size to image size
+            canvas.width = img.naturalWidth || img.width;
+            canvas.height = img.naturalHeight || img.height;
+
+            // Fill white background (for transparency conversion)
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw image on canvas
+            ctx.drawImage(img, 0, 0);
+
+            // Convert to highest quality JPG
+            canvas.toBlob(function(blob) {
+                if (blob) {
+                    const link = document.createElement('a');
+                    link.href = URL.createObjectURL(blob);
+                    link.download = filename.replace(/\.(png|webp|jpg|jpeg)$/i, '.jpg');
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(link.href);
+                } else {
+                    // Fallback to original method
+                    window.open(url, '_blank', 'noopener,noreferrer');
+                }
+            }, 'image/jpeg', 1.0); // 1.0 = highest quality
+        };
+
+        img.onerror = function() {
+            // Fallback to original download method
+            fetch(url)
+                .then(response => response.blob())
+                .then(blob => {
+                    const link = document.createElement('a');
+                    link.href = URL.createObjectURL(blob);
+                    link.download = filename;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(link.href);
+                })
+                .catch(error => {
+                    console.log('Download failed, opening in new tab instead:', error);
+                    // Fallback to opening in new tab if download fails
+                    window.open(url, '_blank', 'noopener,noreferrer');
+                });
+        };
+
+        // Start loading image
+        img.src = url;
     }
 
     // Add high-res buttons to valid media elements
@@ -184,7 +255,7 @@
             if (!parent) return;
 
             // Skip if buttons already exist
-            if (parent.querySelector('.ig-btn-container')) return;
+            if (parent.querySelector('.ig-feed-btn-container, .ig-story-btn-container')) return;
 
             // Make parent positioned if it's not already
             const computedStyle = getComputedStyle(parent);
@@ -196,9 +267,9 @@
             const mediaInfo = getMediaInfo(element);
             if (!mediaInfo.url) return;
 
-            // Create container for buttons
+            // Create container for buttons with appropriate class
             const container = document.createElement('div');
-            container.className = 'ig-btn-container';
+            container.className = mediaInfo.isStory ? 'ig-story-btn-container' : 'ig-feed-btn-container';
 
             // Create the open button
             const openButton = document.createElement('div');
