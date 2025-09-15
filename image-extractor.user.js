@@ -2,7 +2,7 @@
 // @name         [Instagram] Image Extractor
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://static.cdninstagram.com/rsrc.php/y4/r/QaBlI0OZiks.ico
-// @version      1.2
+// @version      1.3
 // @description  Adds buttons to Instagram posts to open or download the highest resolution images (including stories)
 // @author       Xiv
 // @match        *://*.instagram.com/*
@@ -298,5 +298,4 @@
         }
     }, 500);
 
-    console.log('Instagram High-Res Image Button script loaded successfully! Now supports images only.');
 })();
