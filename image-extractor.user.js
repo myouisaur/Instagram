@@ -2,7 +2,7 @@
 // @name         [Instagram] Image Extractor
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://static.cdninstagram.com/rsrc.php/y4/r/QaBlI0OZiks.ico
-// @version      1.7
+// @version      1.9
 // @description  Adds buttons to Instagram posts to open or download the highest resolution images (including stories)
 // @author       Xiv
 // @match        *://*.instagram.com/*
@@ -22,9 +22,7 @@
             right: 12px !important;
             display: flex !important;
             gap: 6px;
-            z-index: 999999;
-            opacity: 1;
-            pointer-events: auto;
+            z-index: 9999 !important;
         }
         .ig-story-btn-container {
             position: absolute !important;
@@ -33,9 +31,7 @@
             transform: translateX(-50%) !important;
             display: flex !important;
             gap: 6px;
-            z-index: 999999;
-            opacity: 1;
-            pointer-events: auto;
+            z-index: 9999 !important;
         }
         .ig-highres-btn {
             width: 36px;
@@ -46,11 +42,22 @@
             border-radius: 10px;
             cursor: pointer;
             border: 1px solid rgba(255,255,255,0.1);
-            display: flex;
+            display: flex !important;
             align-items: center;
             justify-content: center;
             font-size: 15px;
             box-shadow: 0 6px 18px rgba(0,0,0,0.2);
+            transition: transform 0.12s ease, opacity 0.12s ease;
+        }
+        .ig-highres-btn:hover {
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(12px);
+            border: 1.5px solid rgba(255, 255, 255, 0.3);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        }
+        .ig-highres-btn:active {
+            transform: scale(0.95);
+            opacity: 0.9;
         }
     `;
 
@@ -58,13 +65,20 @@
     GM_addStyle(BUTTON_CSS);
 
     // Generate random string for filename
-    function generateRandomString(length) {
+    function generateRandomString(length = 15) {
         const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
         let result = '';
         for (let i = 0; i < length; i++) {
             result += chars.charAt(Math.floor(Math.random() * chars.length));
         }
         return result;
+    }
+
+    // Get resolution from image element
+    function getResolution(img) {
+        const w = img.naturalWidth || img.offsetWidth || 0;
+        const h = img.naturalHeight || img.offsetHeight || 0;
+        return `${w}x${h}`;
     }
 
     // Check if current page is a profile page
@@ -160,12 +174,13 @@
     // Get media type and appropriate filename
     function getMediaInfo(element) {
         const randomStr = generateRandomString(15);
+        const resolution = getResolution(element);
         const isStory = isStoryContext(element);
-        const prefix = isStory ? 'instagram-story' : 'instagram-image';
+        const prefix = isStory ? 'ig-story' : 'ig-image';
 
         return {
             type: 'image',
-            filename: `${prefix}-${randomStr}.jpg`,
+            filename: `${prefix}-${resolution}-${randomStr}.jpg`,
             url: getHighestResImage(element),
             isStory: isStory
         };
