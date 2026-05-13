@@ -2,286 +2,398 @@
 // @name         [Instagram] Image Extractor
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://static.cdninstagram.com/rsrc.php/y4/r/QaBlI0OZiks.ico
-// @version      2.0
-// @description  Adds buttons to Instagram posts to open or download the highest resolution images (including stories). Keeps JPG/JPEG originals, converts PNG/WEBP → JPG (0.92 quality).
+// @version      3.6
+// @description  Extracts and downloads the highest-resolution images directly from the Instagram feed and stories.
 // @author       Xiv
 // @match        *://*.instagram.com/*
-// @grant        GM_addStyle
 // @updateURL    https://myouisaur.github.io/Instagram/image-extractor.user.js
 // @downloadURL  https://myouisaur.github.io/Instagram/image-extractor.user.js
 // ==/UserScript==
 
-(function() {
+(function () {
     'use strict';
 
-    const BUTTON_CSS = `
-        .ig-feed-btn-container {
+    // ==========================================
+    // 1. CONFIGURATION & STATE
+    // ==========================================
+
+    if (window.__tmIgExtractor) return;
+    window.__tmIgExtractor = true;
+
+    const CONFIG = {
+        JPG_QUALITY: 1.0,
+        DEBOUNCE_MS: 150,
+        SELECTORS: {
+            MEDIA_ELEMENTS: 'img',
+        },
+        ICONS: {
+            DOWNLOAD: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:18px;height:18px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>',
+            LINK: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:18px;height:18px;"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>',
+            SPINNER: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="tm-spin" style="width:18px;height:18px;"><line x1="12" y1="2" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="22"></line><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line><line x1="2" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="22" y2="12"></line><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line></svg>'
+        }
+    };
+
+    const State = {
+        observer: null,
+        debounceTimer: null
+    };
+
+    // ==========================================
+    // 2. STYLES
+    // ==========================================
+
+    const CSS = `
+        .tm-btn-container {
             position: absolute !important;
+            z-index: 99999 !important;
+            display: flex !important;
+            gap: 8px;
+            pointer-events: auto;
+        }
+        .tm-feed-btn {
             top: 12px !important;
             right: 12px !important;
-            display: flex !important;
-            gap: 6px;
-            z-index: 9999 !important;
         }
-        .ig-story-btn-container {
-            position: absolute !important;
-            bottom: 14px !important;
+        .tm-story-btn {
+            /* Dynamic responsive boundary: scales naturally but enforces safe min/max limits */
+            bottom: clamp(70px, 5%, 110px) !important;
             left: 50% !important;
             transform: translateX(-50%) !important;
-            display: flex !important;
-            gap: 6px;
-            z-index: 9999 !important;
         }
-        .ig-highres-btn {
-            width: 36px;
-            height: 36px;
-            background: rgba(0,0,0,0.4);
-            backdrop-filter: blur(6px);
-            color: white;
-            border-radius: 10px;
+        .tm-action-btn {
+            width: 38px;
+            height: 38px;
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            color: #ffffff;
+            border-radius: 50%;
             cursor: pointer;
-            border: 1px solid rgba(255,255,255,0.1);
+            border: 1px solid rgba(255, 255, 255, 0.15);
             display: flex !important;
             align-items: center;
             justify-content: center;
-            font-size: 15px;
-            box-shadow: 0 6px 18px rgba(0,0,0,0.2);
-            transition: transform 0.12s ease, opacity 0.12s ease;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            transition: all 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94);
         }
-        .ig-highres-btn:hover {
-            background: rgba(0, 0, 0, 0.6);
-            backdrop-filter: blur(12px);
-            border: 1.5px solid rgba(255, 255, 255, 0.3);
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        .tm-action-btn:hover {
+            background: rgba(0, 0, 0, 0.8);
+            transform: scale(1.05);
+            border-color: rgba(255, 255, 255, 0.4);
         }
-        .ig-highres-btn:active {
+        .tm-action-btn:active {
             transform: scale(0.95);
-            opacity: 0.9;
+        }
+        .tm-spin {
+            animation: tm-spin-anim 1s linear infinite;
+        }
+        @keyframes tm-spin-anim {
+            100% { transform: rotate(360deg); }
         }
     `;
 
-    GM_addStyle(BUTTON_CSS);
+    // ==========================================
+    // 3. REACT FIBER EXTRACTION
+    // ==========================================
 
-    function generateRandomString(length = 15) {
-        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-        return Array.from({ length }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
-    }
+    const Extractor = {
+        getMediaData(element) {
+            let currentEl = element;
+            let depth = 0;
 
-    function getResolution(img) {
-        const w = img.naturalWidth || img.offsetWidth || 0;
-        const h = img.naturalHeight || img.offsetHeight || 0;
-        return `${w}x${h}`;
-    }
+            while (currentEl && depth < 10) {
+                const fiberKey = Object.keys(currentEl).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactProps$') || k.startsWith('__reactInternalInstance$'));
 
-    function isProfilePage() {
-        const path = window.location.pathname;
-        const profilePattern = /^\/[^\/]+\/?(?:tagged|reels|saved)?\/?\s*$/;
-        return profilePattern.test(path) && !path.startsWith('/p/') && !path.startsWith('/reel/') && !path.startsWith('/stories/');
-    }
+                if (fiberKey) {
+                    let node = currentEl[fiberKey];
+                    let fiberDepth = 0;
 
-    function isStoryContext(element) {
-        if (window.location.pathname.includes('/stories/')) return true;
-        if (element.closest('[data-testid="story-viewer"]') ||
-            (element.closest('[role="dialog"]') && window.location.pathname.includes('/stories/')) ||
-            (element.closest('section') && element.closest('section').querySelector('[data-testid*="story"]'))) {
-            return true;
-        }
-        return false;
-    }
+                    while (node && fiberDepth < 40) {
+                        const props = node.memoizedProps;
+                        if (props) {
+                            const sources = [props, props.media, props.item, props.post].filter(Boolean);
 
-    function getHighestResImage(img) {
-        if (img.srcset) {
-            const sources = img.srcset.split(',')
-                .map(source => {
-                    const [url, width] = source.trim().split(' ');
-                    return { url: url.trim(), width: parseInt(width) || 0 };
-                })
-                .sort((a, b) => b.width - a.width);
-            if (sources.length > 0 && sources[0].url) return sources[0].url;
-        }
-        if (img.dataset && img.dataset.largeImage) return img.dataset.largeImage;
-        return img.src;
-    }
+                            for (const source of sources) {
+                                const isVideo = Boolean(source.video_versions || source.is_video || source.media_type === 2);
 
-    function isPostMedia(element) {
-        const src = element.src || '';
-        if (!src) return false;
-        if (isProfilePage()) return false;
-        if (!element.offsetParent) return false;
-        if (src.includes('/profile_pic/') || src.includes('s150x150')) return false;
-        if (element.closest('header') || element.closest('nav') || element.closest('footer')) return false;
-        if (src.includes('/sprites/') || src.includes('instagram.com/static/')) return false;
-        if (src.endsWith('.svg') || src.startsWith('data:')) return false;
-        if (element.naturalWidth < 200 || element.naturalHeight < 200) return false;
-        if (element.closest('article') ||
-            element.closest('[data-testid="media-viewer-content"]') ||
-            element.closest('[role="dialog"]') ||
-            element.closest('section') ||
-            element.closest('[data-testid="story-viewer"]')) {
-            return true;
-        }
-        return false;
-    }
-
-    function getMediaInfo(element) {
-        const randomStr = generateRandomString(15);
-        const resolution = getResolution(element);
-        const isStory = isStoryContext(element);
-        const prefix = isStory ? 'ig-story' : 'ig-image';
-        const url = getHighestResImage(element);
-
-        let extension = 'jpg';
-        if (url.includes('.png')) extension = 'png';
-        else if (url.includes('.webp')) extension = 'webp';
-        else if (url.includes('.jpeg')) extension = 'jpeg';
-
-        return {
-            type: 'image',
-            filename: `${prefix}-${resolution}-${randomStr}.${extension}`,
-            url: url,
-            isStory: isStory
-        };
-    }
-
-    // ✅ Updated Download Function
-    function downloadMedia(url, filename) {
-        // Direct download for JPG/JPEG
-        if (/\.(jpg|jpeg)$/i.test(filename)) {
-            return fetch(url)
-                .then(r => r.ok ? r.blob() : Promise.reject())
-                .then(blob => {
-                    const link = document.createElement('a');
-                    link.href = URL.createObjectURL(blob);
-                    link.download = filename;
-                    document.body.appendChild(link);
-                    link.click();
-                    document.body.removeChild(link);
-                    URL.revokeObjectURL(link.href);
-                })
-                .catch(() => window.open(url, '_blank', 'noopener,noreferrer'));
-        }
-
-        // Convert PNG/WEBP → JPG at quality 0.92
-        if (/\.(png|webp)$/i.test(filename)) {
-            const img = new Image();
-            img.crossOrigin = 'anonymous';
-            img.onload = function() {
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
-                canvas.width = img.naturalWidth || img.width;
-                canvas.height = img.naturalHeight || img.height;
-                ctx.fillStyle = '#FFFFFF';
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-                ctx.drawImage(img, 0, 0);
-                canvas.toBlob(function(blob) {
-                    if (blob) {
-                        const link = document.createElement('a');
-                        link.href = URL.createObjectURL(blob);
-                        link.download = filename.replace(/\.(png|webp)$/i, '.jpg');
-                        document.body.appendChild(link);
-                        link.click();
-                        document.body.removeChild(link);
-                        URL.revokeObjectURL(link.href);
-                    } else {
-                        window.open(url, '_blank', 'noopener,noreferrer');
+                                if (source.image_versions2?.candidates?.length) {
+                                    const bestImage = source.image_versions2.candidates.sort((a, b) => b.width - a.width)[0].url;
+                                    return { url: bestImage, isVideo: isVideo };
+                                }
+                            }
+                        }
+                        node = node.return;
+                        fiberDepth++;
                     }
-                }, 'image/jpeg', 0.92);
-            };
-            img.onerror = () => window.open(url, '_blank', 'noopener,noreferrer');
-            img.src = url;
-            return;
-        }
-
-        // Fallback
-        fetch(url)
-            .then(r => r.ok ? r.blob() : Promise.reject())
-            .then(blob => {
-                const link = document.createElement('a');
-                link.href = URL.createObjectURL(blob);
-                link.download = filename;
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-                URL.revokeObjectURL(link.href);
-            })
-            .catch(() => window.open(url, '_blank', 'noopener,noreferrer'));
-    }
-
-    function removeOldButtons() {
-        document.querySelectorAll('.ig-feed-btn-container, .ig-story-btn-container').forEach(c => c.remove());
-    }
-
-    function addMediaButtons() {
-        removeOldButtons();
-        document.querySelectorAll('img').forEach(element => {
-            if (!isPostMedia(element)) return;
-            const parent = element.parentElement;
-            if (!parent) return;
-            if (parent.querySelector('.ig-feed-btn-container, .ig-story-btn-container')) return;
-            if (!/relative|absolute|fixed|sticky/i.test(getComputedStyle(parent).position)) {
-                parent.style.position = 'relative';
+                }
+                currentEl = currentEl.parentElement;
+                depth++;
             }
-            const mediaInfo = getMediaInfo(element);
-            if (!mediaInfo.url) return;
-
-            const container = document.createElement('div');
-            container.className = mediaInfo.isStory ? 'ig-story-btn-container' : 'ig-feed-btn-container';
-
-            const openButton = document.createElement('div');
-            openButton.textContent = '🔗';
-            openButton.className = 'ig-highres-btn';
-            openButton.title = `Open original ${mediaInfo.type}`;
-            openButton.addEventListener('mousedown', e => {
-                e.stopPropagation();
-                e.preventDefault();
-                const currentMediaInfo = getMediaInfo(element);
-                window.open(currentMediaInfo.url, '_blank', 'noopener,noreferrer');
-            });
-
-            const downloadButton = document.createElement('div');
-            downloadButton.textContent = '⬇';
-            downloadButton.className = 'ig-highres-btn';
-            downloadButton.title = `Download highest resolution ${mediaInfo.type}`;
-            downloadButton.addEventListener('mousedown', e => {
-                e.stopPropagation();
-                e.preventDefault();
-                const currentMediaInfo = getMediaInfo(element);
-                downloadMedia(currentMediaInfo.url, currentMediaInfo.filename);
-            });
-
-            container.appendChild(openButton);
-            container.appendChild(downloadButton);
-            parent.appendChild(container);
-        });
-    }
-
-    let debounceTimer = null;
-    function debouncedAddButtons() {
-        if (debounceTimer) clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(addMediaButtons, 100);
-    }
-
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', debouncedAddButtons);
-    } else {
-        debouncedAddButtons();
-    }
-
-    window.addEventListener('load', () => setTimeout(debouncedAddButtons, 200));
-    setTimeout(debouncedAddButtons, 500);
-    setTimeout(debouncedAddButtons, 1000);
-    setTimeout(debouncedAddButtons, 2000);
-
-    const observer = new MutationObserver(debouncedAddButtons);
-    observer.observe(document.body, { childList: true, subtree: true });
-
-    let currentPath = window.location.pathname;
-    setInterval(() => {
-        if (window.location.pathname !== currentPath) {
-            currentPath = window.location.pathname;
-            removeOldButtons();
-            setTimeout(debouncedAddButtons, 300);
+            return { url: null, isVideo: false };
         }
-    }, 500);
+    };
+
+    // ==========================================
+    // 4. MEDIA PROCESSING
+    // ==========================================
+
+    const Media = {
+        generateFilename(type) {
+            const part1 = Math.random().toString(36).substring(2, 8);
+            const part2 = Math.random().toString(36).substring(2, 8);
+            const randomStr = (part1 + part2).padEnd(12, '0').substring(0, 12);
+            return `ig-${type}-${randomStr}.jpg`;
+        },
+
+        resolveBestUrl(element, mediaData) {
+            if (mediaData && mediaData.url) return mediaData.url;
+
+            if (element.srcset) {
+                const sources = element.srcset.split(',').map(s => {
+                    const [url, width] = s.trim().split(' ');
+                    return { url, width: parseInt(width) || 0 };
+                }).sort((a, b) => b.width - a.width);
+                if (sources[0]) return sources[0].url;
+            }
+
+            return element.src;
+        },
+
+        async download(url, filename, buttonElement) {
+            UI.setButtonState(buttonElement, 'loading');
+
+            try {
+                if (url.includes('.webp') || url.includes('.png')) {
+                    await this.convertAndDownload(url, filename);
+                    UI.setButtonState(buttonElement, 'ready', true);
+                } else {
+                    const response = await fetch(url);
+                    if (!response.ok) throw new Error('Fetch failed');
+                    const blob = await response.blob();
+                    this.triggerDownload(URL.createObjectURL(blob), filename);
+                    UI.setButtonState(buttonElement, 'ready', true);
+                }
+            } catch (error) {
+                console.warn('[IG Extractor] Download failed, falling back to open:', error);
+                UI.setButtonState(buttonElement, 'error', true);
+                setTimeout(() => window.open(url, '_blank', 'noopener,noreferrer'), 1000);
+            }
+        },
+
+        convertAndDownload(url, filename) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.crossOrigin = 'anonymous';
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = img.naturalWidth;
+                    canvas.height = img.naturalHeight;
+                    const ctx = canvas.getContext('2d');
+
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(img, 0, 0);
+
+                    canvas.toBlob((blob) => {
+                        if (blob) {
+                            this.triggerDownload(URL.createObjectURL(blob), filename);
+                            resolve();
+                        } else reject(new Error('Canvas toBlob failed'));
+                    }, 'image/jpeg', CONFIG.JPG_QUALITY);
+                };
+                img.onerror = () => reject(new Error('Image load failed'));
+                img.src = url;
+            });
+        },
+
+        triggerDownload(blobUrl, filename) {
+            const link = document.createElement('a');
+            link.href = blobUrl;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+        }
+    };
+
+    // ==========================================
+    // 5. USER INTERFACE & DOM MANAGEMENT
+    // ==========================================
+
+    const UI = {
+        injectStyles() {
+            const style = document.createElement('style');
+            style.textContent = CSS;
+            document.head.appendChild(style);
+        },
+
+        setButtonState(btn, state, isDownloadBtn = false) {
+            if (state === 'loading') {
+                btn.innerHTML = CONFIG.ICONS.SPINNER;
+                btn.style.pointerEvents = 'none';
+                btn.style.opacity = '0.7';
+            } else if (state === 'error') {
+                btn.innerHTML = '⚠️';
+                btn.title = 'Download failed. Opening link instead.';
+                btn.style.pointerEvents = 'auto';
+                btn.style.opacity = '1';
+                setTimeout(() => this.setButtonState(btn, 'ready', isDownloadBtn), 3000);
+            } else if (state === 'ready') {
+                btn.innerHTML = isDownloadBtn ? CONFIG.ICONS.DOWNLOAD : CONFIG.ICONS.LINK;
+                btn.style.pointerEvents = 'auto';
+                btn.style.opacity = '1';
+            }
+        },
+
+        createContainer(isStory) {
+            const container = document.createElement('div');
+            container.className = `tm-btn-container ${isStory ? 'tm-story-btn' : 'tm-feed-btn'}`;
+            return container;
+        },
+
+        createButton(type, onClickAction) {
+            const btn = document.createElement('div');
+            btn.className = 'tm-action-btn';
+            btn.innerHTML = type === 'download' ? CONFIG.ICONS.DOWNLOAD : CONFIG.ICONS.LINK;
+            btn.title = type === 'download' ? 'Download High-Res' : 'Open in New Tab';
+
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onClickAction(btn);
+            });
+            return btn;
+        }
+    };
+
+    const DOM = {
+        isValidMedia(el) {
+            const rect = el.getBoundingClientRect();
+            if (rect.width < 150 || rect.height < 150) return false;
+
+            const src = el.src || '';
+            if (src.includes('/profile_pic/') || src.includes('s150x150')) return false;
+            if (src.includes('static.cdninstagram.com') || src.startsWith('data:')) return false;
+
+            const inArticle = el.closest('article');
+            const inDialog = el.closest('[role="dialog"]');
+            const inStory = el.closest('[data-testid="story-viewer"]') || window.location.pathname.includes('/stories/');
+
+            if (!inArticle && !inDialog && !inStory) {
+                return false;
+            }
+
+            const slide = el.closest('li, article, [role="dialog"]');
+            if (slide && slide.querySelector('video')) {
+                return false;
+            }
+
+            return true;
+        },
+
+        isStory() {
+            return window.location.pathname.includes('/stories/');
+        },
+
+        processMediaElements() {
+            const mediaElements = document.querySelectorAll(CONFIG.SELECTORS.MEDIA_ELEMENTS);
+
+            mediaElements.forEach(media => {
+                if (!this.isValidMedia(media)) return;
+
+                const wrapper = media.parentElement;
+                if (!wrapper) return;
+
+                const currentSrc = media.src;
+
+                const mediaData = Extractor.getMediaData(media);
+                if (mediaData.isVideo) return;
+
+                if (media.dataset.tmProcessedSrc === currentSrc) {
+                    if (wrapper.querySelector('.tm-btn-container')) return;
+                }
+
+                wrapper.querySelectorAll('.tm-btn-container').forEach(c => c.remove());
+                media.dataset.tmProcessedSrc = currentSrc;
+
+                const position = window.getComputedStyle(wrapper).position;
+                if (position === 'static') wrapper.style.position = 'relative';
+
+                const inStory = this.isStory();
+                const btnContainer = UI.createContainer(inStory);
+
+                const linkBtn = UI.createButton('link', () => {
+                    const url = Media.resolveBestUrl(media, mediaData);
+                    if (url) window.open(url, '_blank', 'noopener,noreferrer');
+                });
+
+                const downloadBtn = UI.createButton('download', (btn) => {
+                    const url = Media.resolveBestUrl(media, mediaData);
+                    if (!url) return;
+
+                    const filename = Media.generateFilename(inStory ? 'story' : 'feed');
+                    Media.download(url, filename, btn);
+                });
+
+                btnContainer.appendChild(linkBtn);
+                btnContainer.appendChild(downloadBtn);
+                wrapper.appendChild(btnContainer);
+            });
+        },
+
+        requestUpdate() {
+            if (State.debounceTimer) clearTimeout(State.debounceTimer);
+            State.debounceTimer = setTimeout(() => this.processMediaElements(), CONFIG.DEBOUNCE_MS);
+        },
+
+        initObserver() {
+            State.observer = new MutationObserver((mutations) => {
+                const shouldUpdate = mutations.some(m =>
+                    m.addedNodes.length > 0 || (m.type === 'attributes' && m.attributeName === 'src')
+                );
+                if (shouldUpdate) this.requestUpdate();
+            });
+
+            State.observer.observe(document.body, {
+                childList: true,
+                subtree: true,
+                attributes: true,
+                attributeFilter: ['src']
+            });
+        }
+    };
+
+    // ==========================================
+    // 6. INITIALIZATION
+    // ==========================================
+
+    const App = {
+        init() {
+            UI.injectStyles();
+
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', () => this.start());
+            } else {
+                this.start();
+            }
+        },
+
+        start() {
+            DOM.processMediaElements();
+            DOM.initObserver();
+
+            let lastUrl = location.href;
+            new MutationObserver(() => {
+                const currentUrl = location.href;
+                if (currentUrl !== lastUrl) {
+                    lastUrl = currentUrl;
+                    DOM.requestUpdate();
+                }
+            }).observe(document, { subtree: true, childList: true });
+        }
+    };
+
+    App.init();
 
 })();
