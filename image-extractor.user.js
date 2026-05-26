@@ -2,7 +2,7 @@
 // @name         [Instagram] Image Extractor
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://static.cdninstagram.com/rsrc.php/y4/r/QaBlI0OZiks.ico
-// @version      4.5
+// @version      4.6
 // @description  Extracts and downloads the highest-resolution images directly from the Instagram feed and stories.
 // @author       Xiv
 // @match        *://*.instagram.com/*
@@ -571,14 +571,25 @@
             if (src.includes('/profile_pic/') || src.includes('s150x150')) return false;
             if (src.includes('static.cdninstagram.com') || src.startsWith('data:')) return false;
 
-            const inArticle = el.closest('article');
-            const inDialog  = el.closest('[role="dialog"]');
-            const inStory   = el.closest('[data-testid="story-viewer"]') || window.location.pathname.includes('/stories/');
+            // Exclude structural UI elements, profile avatars, and sidebars
+            if (el.closest('header, nav')) return false;
+
+            // Exclude thumbnails in Profile and Explore grids.
+            // In these layouts, thumbnails are wrapped in anchor tags targeting the post.
+            if (el.closest('a[href*="/p/"], a[href*="/reel/"], a[href*="/reels/"]')) return false;
+
+            const inArticle   = el.closest('article');
+            const inDialog    = el.closest('[role="dialog"]');
+            const inStory     = el.closest('[data-testid="story-viewer"]') || window.location.pathname.includes('/stories/');
+            const inMain      = el.closest('main');
             const isPermalink = window.location.pathname.includes('/p/') || window.location.pathname.includes('/reel/') || window.location.pathname.includes('/reels/');
 
-            if (!inArticle && !inDialog && !inStory && !isPermalink) return false;
+            // Ensure the image belongs to a valid container.
+            // If on a permalink page without an article, restrict it tightly to the <main> block.
+            if (!inArticle && !inDialog && !inStory && !(isPermalink && inMain)) return false;
 
-            const slide = el.closest('li, article, [role="dialog"], main');
+            // Prevent false positives in mixed image/video carousels by scoping closely to the active slide wrapper.
+            const slide = el.closest('li') || el.parentElement;
             if (slide && slide.querySelector('video')) return false;
 
             return true;
@@ -611,7 +622,7 @@
                 const position = window.getComputedStyle(wrapper).position;
                 if (position === 'static') wrapper.style.position = 'relative';
 
-                const inStory     = this.isStory();
+                const inStory      = this.isStory();
                 const btnContainer = UI.createContainer(inStory);
 
                 const linkBtn = UI.createButton('link', () => {
@@ -655,7 +666,6 @@
         },
 
         setupNavigationHooks() {
-            // Replaces the heavy document mutation string comparison from v4.4
             const patchHistory = (method) => {
                 const orig = history[method];
                 return function() {
