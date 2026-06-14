@@ -2,8 +2,8 @@
 // @name         [Instagram] Viewed Post Marker
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://www.instagram.com/favicon.ico
-// @version      2.5
-// @description  Manually mark Instagram posts as seen with silent cross-device GitHub synchronization.
+// @version      2.6
+// @description  Manually mark Instagram posts as seen with silent cross-device synchronization.
 // @author       Xiv
 // @match        *://*.instagram.com/*
 // @noframes
@@ -11,6 +11,7 @@
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addValueChangeListener
+// @grant        GM_registerMenuCommand
 // @connect      api.github.com
 // @connect      raw.githubusercontent.com
 // @connect      *
@@ -26,11 +27,10 @@
     window.__tmIgTrackerInitialized = true;
 
     // =========================================================
-    // HARDCODED CONFIGURATION
+    // CONFIGURATION
     // =========================================================
     const CLOUD_CONFIG = {
         WORKER_URL: 'https://ig-viewed-post-marker.myouisaur.workers.dev/',
-        GITHUB_TOKEN: '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',
         OWNER: 'myouisaur',
         REPO: 'Instagram',
         BRANCH: 'main',
@@ -39,7 +39,8 @@
 
     const CONFIG = {
         UI_PREFIX: 'tm-ig-seen',
-        STORAGE_KEY: 'tm_ig_seen_data_v3', // Upgraded schema for cloud sync
+        STORAGE_KEY: 'tm_ig_seen_data_v3', 
+        TOKEN_KEY: 'tm_ig_github_token',
         OBSERVER_DEBOUNCE_MS: 150,
         CLOUD_SYNC_DEBOUNCE_MS: 3000
     };
@@ -85,9 +86,20 @@
     // CLOUD API ENGINE
     // =========================================================
     const CloudAPI = {
+        getToken() {
+            let token = GM_getValue(CONFIG.TOKEN_KEY, null);
+            
+            if (token === null) {
+                token = window.prompt('[Instagram Viewed Post Marker]\n\nPlease enter your GitHub Personal Access Token to enable cloud sync:') || '';
+                GM_setValue(CONFIG.TOKEN_KEY, token.trim());
+            }
+            
+            return token.trim();
+        },
+
         getHeaders() {
             return {
-                'X-GitHub-Token': CLOUD_CONFIG.GITHUB_TOKEN,
+                'X-GitHub-Token': this.getToken(),
                 'X-GitHub-Owner': CLOUD_CONFIG.OWNER,
                 'X-GitHub-Repo': CLOUD_CONFIG.REPO,
                 'X-GitHub-Path': CLOUD_CONFIG.PATH,
@@ -97,6 +109,8 @@
 
         fetch() {
             return new Promise((resolve, reject) => {
+                if (!this.getToken()) return reject(new Error('No GitHub token configured.'));
+
                 GM_xmlhttpRequest({
                     method: 'GET',
                     url: CLOUD_CONFIG.WORKER_URL,
@@ -107,7 +121,8 @@
                         if (res.status === 200) {
                             let data = res.response;
                             if (typeof data === 'string') {
-                                try { data = JSON.parse(data); } catch (e) { resolve({}); return; }
+                                try { data = JSON.parse(data); } 
+                                catch (e) { resolve({}); return; }
                             }
                             resolve(data);
                         } else if (res.status === 404) {
@@ -124,6 +139,8 @@
 
         put(payloadData) {
             return new Promise((resolve, reject) => {
+                if (!this.getToken()) return reject(new Error('No GitHub token configured.'));
+
                 GM_xmlhttpRequest({
                     method: 'PUT',
                     url: CLOUD_CONFIG.WORKER_URL,
@@ -162,20 +179,17 @@
     // STORAGE & SYNC MODULE
     // =========================================================
     const Storage = {
-        // Schema: { "shortcode": { s: boolean, t: timestamp } }
         data: {},
         _saveCloudDebounced: null,
 
         async init() {
             this.loadLocal();
-
             this._saveCloudDebounced = Utils.debounce(() => {
                 this.pushToCloud();
             }, CONFIG.CLOUD_SYNC_DEBOUNCE_MS);
-
+            
             this.setupCrossTabSync();
 
-            // Pull initial state from cloud on load
             try {
                 const cloudData = await CloudAPI.fetch();
                 if (cloudData && Object.keys(cloudData).length > 0) {
@@ -192,16 +206,13 @@
                 if (rawV3) {
                     this.data = JSON.parse(rawV3);
                 } else {
-                    // Migrate from v2 array to v3 timestamped object
                     const rawV2 = GM_getValue('tm_ig_seen_data_v2', '[]');
                     const dataV2 = JSON.parse(rawV2);
                     const migrated = {};
                     const now = Date.now();
-
                     dataV2.forEach(shortcode => {
                         migrated[shortcode] = { s: true, t: now };
                     });
-
                     this.data = migrated;
                     this.saveLocal();
                 }
@@ -217,16 +228,12 @@
 
         mergeData(remoteData) {
             let changed = false;
-
             for (const [shortcode, remoteState] of Object.entries(remoteData)) {
                 const localState = this.data[shortcode];
-
-                // If local doesn't have it, or remote is newer, adopt remote
                 if (!localState || remoteState.t > localState.t) {
                     this.data[shortcode] = remoteState;
                     changed = true;
 
-                    // Dispatch sync event for UI
                     document.dispatchEvent(new CustomEvent(`${CONFIG.UI_PREFIX}-sync`, {
                         detail: { shortcode, isSeen: remoteState.s }
                     }));
@@ -267,11 +274,11 @@
             this.data[shortcode] = { s: newState, t: Date.now() };
             this.saveLocal();
             this._saveCloudDebounced();
-
+            
             document.dispatchEvent(new CustomEvent(`${CONFIG.UI_PREFIX}-sync`, {
                 detail: { shortcode, isSeen: newState }
             }));
-
+            
             return newState;
         },
 
@@ -368,7 +375,7 @@
                 }
             `;
             document.head.appendChild(style);
-
+            
             document.addEventListener(`${CONFIG.UI_PREFIX}-sync`, (e) => {
                 const { shortcode, isSeen } = e.detail;
 
@@ -406,18 +413,18 @@
             const overlay = document.createElement('div');
             overlay.className = `${CONFIG.UI_PREFIX}-overlay ${isSeen ? 'active' : ''}`;
             overlay.appendChild(Utils.createSVG(ICONS.check));
-
+            
             const btn = document.createElement('button');
             btn.className = `${CONFIG.UI_PREFIX}-grid-btn ${isSeen ? 'active' : ''}`;
             btn.title = "Toggle Seen Status";
             btn.appendChild(Utils.createSVG(ICONS.eye));
-
+            
             btn.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 Storage.toggle(shortcode);
             });
-
+            
             wrapper.appendChild(overlay);
             wrapper.appendChild(btn);
             linkEl.appendChild(wrapper);
@@ -441,13 +448,13 @@
 
             const isSeen = Storage.has(shortcode);
             this.renderActionIcon(btn, isSeen, nativeClass);
-
+            
             btn.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 Storage.toggle(shortcode);
             });
-
+            
             anchorElement.parentNode.insertBefore(btn, anchorElement);
         },
 
@@ -480,7 +487,7 @@
             this.observer = new MutationObserver(Utils.debounce(() => {
                 requestAnimationFrame(() => this.scanAll());
             }, CONFIG.OBSERVER_DEBOUNCE_MS));
-
+            
             this.observer.observe(document.body, { childList: true, subtree: true });
         },
 
@@ -491,7 +498,6 @@
 
         scanGrid() {
             if (!PageContext.isProfilePage()) return;
-
             const links = document.querySelectorAll(`a[href*="/p/"]:not(.${CONFIG.UI_PREFIX}-processed), a[href*="/reel/"]:not(.${CONFIG.UI_PREFIX}-processed)`);
 
             links.forEach(link => {
@@ -510,7 +516,7 @@
 
         scanActionBar() {
             const saveIcons = document.querySelectorAll(`svg[aria-label="Save"]:not(.${CONFIG.UI_PREFIX}-processed), svg[aria-label="Remove"]:not(.${CONFIG.UI_PREFIX}-processed)`);
-
+            
             saveIcons.forEach(svg => {
                 const container = svg.closest('article')
                     || svg.closest('[role="dialog"]')
@@ -523,7 +529,7 @@
                     const timeLink = container.querySelector('a[href*="/p/"], a[href*="/reel/"]');
                     if (timeLink) {
                         shortcode = Utils.extractShortcode(timeLink.getAttribute('href'));
-                    }
+                     }
                 }
 
                 if (!shortcode) {
@@ -541,7 +547,7 @@
                 }
 
                 if (!anchor) return;
-
+                
                 if (anchor.parentNode && anchor.parentNode.querySelector(`.${CONFIG.UI_PREFIX}-action-btn`)) {
                     svg.classList.add(`${CONFIG.UI_PREFIX}-processed`);
                     return;
@@ -556,9 +562,19 @@
     // =========================================================
     // BOOTSTRAP
     // =========================================================
+    if (typeof GM_registerMenuCommand === 'function') {
+        GM_registerMenuCommand('Update GitHub Token', () => {
+            const currentToken = GM_getValue(CONFIG.TOKEN_KEY, '');
+            const newToken = window.prompt('[Instagram Viewed Post Marker]\n\nEnter your new GitHub Personal Access Token:', currentToken);
+            if (newToken !== null) {
+                GM_setValue(CONFIG.TOKEN_KEY, newToken.trim());
+                alert('GitHub Token updated successfully. It will be used on the next cloud sync.');
+            }
+        });
+    }
+
     Storage.init().then(() => {
         UI.injectStyles();
         Scanner.start();
     });
-
 })();
