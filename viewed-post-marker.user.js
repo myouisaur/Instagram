@@ -2,7 +2,7 @@
 // @name         [Instagram] Viewed Post Marker
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://www.instagram.com/favicon.ico
-// @version      3.0
+// @version      3.4
 // @description  Manually mark Instagram posts as seen with silent cross-device GitHub synchronization.
 // @author       Xiv
 // @match        *://*.instagram.com/*
@@ -40,11 +40,15 @@
 
     const CONFIG = {
         UI_PREFIX: 'tm-ig-seen',
-        STORAGE_KEY: 'tm_ig_seen_data_v3', 
+        STORAGE_KEY: 'tm_ig_seen_data_v3',
         TOKEN_KEY: 'tm_ig_github_token',
+        DIRTY_KEY: 'tm_ig_sync_dirty',
+        LAST_FETCH_KEY: 'tm_ig_last_fetch',
+        MUTEX_KEY: 'tm_ig_global_mutex',
+        SYNC_LOCK_KEY: 'tm_ig_cloud_sync_lock',
         OBSERVER_DEBOUNCE_MS: 150,
-        CLOUD_SYNC_DEBOUNCE_MS: 3000,
-        CLOUD_HISTORY_THROTTLE_MS: 30000 // Prevents spamming API on rapid tab switches
+        CLOUD_HISTORY_THROTTLE_MS: 30000,
+        CLOUD_FOCUS_THROTTLE_MS: 5000
     };
 
     const ICONS = {
@@ -95,10 +99,10 @@
         async promptForToken() {
             const currentToken = this.getToken();
             const newToken = window.prompt('[Instagram Viewed Post Marker]\n\nEnter your GitHub Personal Access Token to enable cloud sync:\n\n(Leave blank to remove your token)', currentToken);
-            
+
             if (newToken !== null) {
                 const trimmedToken = newToken.trim();
-                
+
                 // User intentionally cleared the prompt
                 if (trimmedToken === '') {
                     GM_setValue(CONFIG.TOKEN_KEY, '');
@@ -107,7 +111,7 @@
                 }
 
                 GM_setValue(CONFIG.TOKEN_KEY, trimmedToken);
-                
+
                 try {
                     await Storage.fetchCloudBackground(true);
                     UI.showAuthToast('GitHub Token authenticated and synced successfully!', 'success');
@@ -132,26 +136,28 @@
         fetch() {
             return new Promise((resolve, reject) => {
                 if (!this.getToken()) {
-                    UI.showAuthToast('GitHub Sync: Token missing. Click to add.', 'error');
-                    return resolve({}); 
+                    return resolve({});
                 }
+
+                // Append timestamp to bypass aggressive browser GET caching
+                const cacheBusterUrl = `${CLOUD_CONFIG.WORKER_URL}?t=${Date.now()}`;
 
                 GM_xmlhttpRequest({
                     method: 'GET',
-                    url: CLOUD_CONFIG.WORKER_URL,
+                    url: cacheBusterUrl,
                     headers: this.getHeaders(),
                     responseType: 'json',
                     timeout: 10000,
                     onload: (res) => {
                         if (res.status === 401 || res.status === 403 || res.status === 400) {
                             UI.showAuthToast('GitHub Sync: Invalid or expired token. Click to update.', 'error');
-                            return resolve({}); 
+                            return resolve({});
                         }
 
                         if (res.status === 200) {
                             let data = res.response;
                             if (typeof data === 'string') {
-                                try { data = JSON.parse(data); } 
+                                try { data = JSON.parse(data); }
                                 catch (e) { resolve({}); return; }
                             }
                             resolve(data);
@@ -215,32 +221,111 @@
     // =========================================================
     const Storage = {
         data: {},
-        _saveCloudDebounced: null,
         _lastCloudFetch: 0,
+        _taskQueue: Promise.resolve(),
 
         async init() {
             this.loadLocal();
-            this._saveCloudDebounced = Utils.debounce(() => {
-                this.pushToCloud();
-            }, CONFIG.CLOUD_SYNC_DEBOUNCE_MS);
-            
             this.setupCrossTabSync();
+            this.setupDirtyListener();
 
-            // Initial page load sync
-            this.fetchCloudBackground(true);
+            // Validate token visually on load
+            if (!CloudAPI.getToken()) {
+                UI.showAuthToast('GitHub Sync: Token missing. Click to add.', 'error');
+            } else {
+                this.fetchCloudBackground(true);
+            }
         },
 
-        async fetchCloudBackground(force = false) {
+        _queueTask(taskFn) {
+            this._taskQueue = this._taskQueue.then(taskFn).catch(e => {
+                console.error('[IG Tracker] Task queue exception', e);
+            });
+            return this._taskQueue;
+        },
+
+        async _withLock(callback) {
+            const lockKey = CONFIG.MUTEX_KEY;
+            const myId = Math.random().toString(36).substring(2, 10);
+            let attempts = 0;
+
+            while (attempts < 200) {
+                const lockStr = GM_getValue(lockKey, null);
+                let currentLock = null;
+                try { currentLock = lockStr ? JSON.parse(lockStr) : null; } catch(e) {}
+
+                const now = Date.now();
+                if (!currentLock || (now - currentLock.time > 3000)) {
+                    GM_setValue(lockKey, JSON.stringify({ id: myId, time: now }));
+                    await new Promise(r => setTimeout(r, 20));
+
+                    const verifyStr = GM_getValue(lockKey, null);
+                    let verifyLock = null;
+                    try { verifyLock = verifyStr ? JSON.parse(verifyStr) : null; } catch(e) {}
+
+                    if (verifyLock && verifyLock.id === myId) {
+                        try {
+                            return await callback();
+                        } finally {
+                            await new Promise(r => setTimeout(r, 75));
+                            GM_setValue(lockKey, null);
+                        }
+                    }
+                }
+
+                const jitter = Math.floor(Math.random() * 40) + 20;
+                await new Promise(r => setTimeout(r, jitter));
+                attempts++;
+            }
+
+            console.warn('[IG Tracker] Global mutex timeout. Forcing execution to prevent stall.');
+            return await callback();
+        },
+
+        setupDirtyListener() {
+            if (typeof GM_addValueChangeListener === 'function') {
+                GM_addValueChangeListener(CONFIG.DIRTY_KEY, (key, oldValue, newValue, remote) => {
+                    if (newValue === true && document.visibilityState === 'visible') {
+                        setTimeout(() => this.pushToCloud(), 200);
+                    }
+                });
+            }
+
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible' && GM_getValue(CONFIG.DIRTY_KEY, false)) {
+                    setTimeout(() => this.pushToCloud(), 200);
+                }
+            });
+        },
+
+        async fetchCloudBackground(force = false, isFocusEvent = false) {
             if (!CloudAPI.getToken()) return;
-            // Respect the throttle limit unless explicitly forced
-            if (!force && Date.now() - this._lastCloudFetch < CONFIG.CLOUD_HISTORY_THROTTLE_MS) return;
-            
-            this._lastCloudFetch = Date.now();
+
+            const now = Date.now();
+            const lastFetch = GM_getValue(CONFIG.LAST_FETCH_KEY, 0);
+            const isDirty = GM_getValue(CONFIG.DIRTY_KEY, false);
+
+            // Bypasses throttle ONLY if forced, OR if there are offline changes waiting to be synced
+            if (!force && !isDirty) {
+                if (isFocusEvent && (now - lastFetch < CONFIG.CLOUD_FOCUS_THROTTLE_MS)) return;
+                if (!isFocusEvent && (now - lastFetch < CONFIG.CLOUD_HISTORY_THROTTLE_MS)) return;
+            }
+
+            // Log fetch time to local storage so multiple tabs share the same throttle limit
+            GM_setValue(CONFIG.LAST_FETCH_KEY, now);
 
             try {
                 const cloudData = await CloudAPI.fetch();
                 if (cloudData && Object.keys(cloudData).length > 0) {
-                    this.mergeData(cloudData);
+                    await this._queueTask(() => this._withLock(async () => {
+                        this.loadLocal(); // Refresh to latest local state before merging
+                        this.mergeData(cloudData);
+                    }));
+                }
+
+                // Retroactive Safety: If local changes previously failed to push, push them now
+                if (isDirty) {
+                    await this.pushToCloud();
                 }
             } catch (e) {
                 console.warn(`[IG Tracker] Background cloud sync failed:`, e);
@@ -270,14 +355,17 @@
         },
 
         saveLocal() {
-            GM_setValue(CONFIG.STORAGE_KEY, JSON.stringify(this.data));
+            // UNBLOCKING MAIN THREAD: Defers the heavy JSON stringify to prevent UI micro-stutters
+            setTimeout(() => {
+                GM_setValue(CONFIG.STORAGE_KEY, JSON.stringify(this.data));
+            }, 0);
         },
 
         mergeData(remoteData) {
             let changed = false;
             for (const [shortcode, remoteState] of Object.entries(remoteData)) {
                 const localState = this.data[shortcode];
-                // If local doesn't have it, or remote timestamp is newer
+                // Timestamp Supremacy: Always accept the newest action
                 if (!localState || remoteState.t > localState.t) {
                     this.data[shortcode] = remoteState;
                     changed = true;
@@ -308,10 +396,51 @@
         },
 
         async pushToCloud() {
+            if (!CloudAPI.getToken()) return 'skipped';
+            const syncLockKey = CONFIG.SYNC_LOCK_KEY;
+            let shouldUpload = false;
+
+            // Elect a Leader Tab using Mutex
+            await this._withLock(async () => {
+                if (Date.now() - GM_getValue(syncLockKey, 0) < 5000) {
+                    // Another tab is actively handling the upload
+                    GM_setValue(CONFIG.DIRTY_KEY, true);
+                    shouldUpload = false;
+                } else {
+                    GM_setValue(syncLockKey, Date.now());
+                    GM_setValue(CONFIG.DIRTY_KEY, false);
+                    shouldUpload = true;
+                }
+            });
+
+            if (!shouldUpload) return 'queued';
+
             try {
+                // PULL-MERGE-PUSH TRANSACTION INSIDE LOCK QUEUE
+                const latestCloudData = await CloudAPI.fetch();
+
+                await this._queueTask(() => this._withLock(async () => {
+                    this.loadLocal(); // Get latest offline data from all cross-tabs
+                    if (latestCloudData && Object.keys(latestCloudData).length > 0) {
+                        this.mergeData(latestCloudData); // Resolves multi-device conflicts instantly
+                    }
+                }));
+
+                // Push combined master dataset
                 await CloudAPI.put(this.data);
+
+                // Release Locks
+                await this._withLock(async () => {
+                    GM_setValue(syncLockKey, 0);
+                });
+                return 'synced';
             } catch (e) {
-                console.error(`[IG Tracker] Cloud push failed:`, e);
+                await this._withLock(async () => {
+                    GM_setValue(syncLockKey, 0);
+                    GM_setValue(CONFIG.DIRTY_KEY, true); // Re-flag for retroactive sync
+                });
+                console.error(`[IG Tracker] Cloud push failed (will retry automatically):`, e);
+                throw e;
             }
         },
 
@@ -319,14 +448,18 @@
             const currentState = this.data[shortcode]?.s || false;
             const newState = !currentState;
 
+            // 1. Instantly update memory
             this.data[shortcode] = { s: newState, t: Date.now() };
-            this.saveLocal();
-            this._saveCloudDebounced();
-            
+
+            // 2. Instantly update UI for zero lag
             document.dispatchEvent(new CustomEvent(`${CONFIG.UI_PREFIX}-sync`, {
                 detail: { shortcode, isSeen: newState }
             }));
-            
+
+            // 3. Defer local DB write & Tag network as dirty so background loops know to push
+            this.saveLocal();
+            GM_setValue(CONFIG.DIRTY_KEY, true);
+
             return newState;
         },
 
@@ -484,7 +617,7 @@
                 }
             `;
             document.head.appendChild(style);
-            
+
             document.addEventListener(`${CONFIG.UI_PREFIX}-sync`, (e) => {
                 const { shortcode, isSeen } = e.detail;
 
@@ -509,17 +642,16 @@
         },
 
         showAuthToast(message, type = 'error') {
-            // Remove any existing toast smoothly before spawning a new one
             this.removeAuthToast(null, true);
 
             const toast = document.createElement('div');
             toast.id = `${CONFIG.UI_PREFIX}-auth-toast`;
             toast.className = `${CONFIG.UI_PREFIX}-toast ${type}`;
-            
+
             const text = document.createElement('span');
             text.textContent = message;
             toast.appendChild(text);
-            
+
             if (type === 'error') {
                 const closeBtn = document.createElement('button');
                 closeBtn.innerHTML = '✕';
@@ -529,12 +661,11 @@
                     this.removeAuthToast(toast);
                 };
                 toast.appendChild(closeBtn);
-                
+
                 toast.onclick = () => {
                     CloudAPI.promptForToken();
                 };
             } else if (type === 'success') {
-                // Auto-dismiss success toast after 3 seconds
                 setTimeout(() => {
                     this.removeAuthToast(toast);
                 }, 3000);
@@ -571,18 +702,18 @@
             const overlay = document.createElement('div');
             overlay.className = `${CONFIG.UI_PREFIX}-overlay ${isSeen ? 'active' : ''}`;
             overlay.appendChild(Utils.createSVG(ICONS.check));
-            
+
             const btn = document.createElement('button');
             btn.className = `${CONFIG.UI_PREFIX}-grid-btn ${isSeen ? 'active' : ''}`;
             btn.title = "Toggle Seen Status";
             btn.appendChild(Utils.createSVG(ICONS.eye));
-            
+
             btn.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 Storage.toggle(shortcode);
             });
-            
+
             wrapper.appendChild(overlay);
             wrapper.appendChild(btn);
             linkEl.appendChild(wrapper);
@@ -606,13 +737,13 @@
 
             const isSeen = Storage.has(shortcode);
             this.renderActionIcon(btn, isSeen, nativeClass);
-            
+
             btn.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 Storage.toggle(shortcode);
             });
-            
+
             anchorElement.parentNode.insertBefore(btn, anchorElement);
         },
 
@@ -644,17 +775,19 @@
         },
 
         bindEvents() {
-            // Listen for user returning to the tab to trigger a background fetch
+            // Smart Tab-Switching: Checks for fresh data when you return to Instagram
             document.addEventListener('visibilitychange', () => {
                 if (document.visibilityState === 'visible') {
-                    Storage.fetchCloudBackground();
+                    // force = false, isFocusEvent = true
+                    Storage.fetchCloudBackground(false, true);
                 }
             });
 
-            // Set up background polling interval
+            // Background Idle Polling
             setInterval(() => {
                 if (document.visibilityState === 'visible') {
-                    Storage.fetchCloudBackground();
+                    // force = false, isFocusEvent = false
+                    Storage.fetchCloudBackground(false, false);
                 }
             }, CONFIG.CLOUD_HISTORY_THROTTLE_MS);
         },
@@ -666,7 +799,7 @@
             this.observer = new MutationObserver(Utils.debounce(() => {
                 requestAnimationFrame(() => this.scanAll());
             }, CONFIG.OBSERVER_DEBOUNCE_MS));
-            
+
             this.observer.observe(document.body, { childList: true, subtree: true });
         },
 
@@ -695,7 +828,7 @@
 
         scanActionBar() {
             const saveIcons = document.querySelectorAll(`svg[aria-label="Save"]:not(.${CONFIG.UI_PREFIX}-processed), svg[aria-label="Remove"]:not(.${CONFIG.UI_PREFIX}-processed)`);
-            
+
             saveIcons.forEach(svg => {
                 const container = svg.closest('article')
                     || svg.closest('[role="dialog"]')
@@ -726,7 +859,7 @@
                 }
 
                 if (!anchor) return;
-                
+
                 if (anchor.parentNode && anchor.parentNode.querySelector(`.${CONFIG.UI_PREFIX}-action-btn`)) {
                     svg.classList.add(`${CONFIG.UI_PREFIX}-processed`);
                     return;
