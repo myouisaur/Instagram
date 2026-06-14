@@ -2,7 +2,7 @@
 // @name         [Instagram] Viewed Post Marker
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://www.instagram.com/favicon.ico
-// @version      2.6
+// @version      2.9
 // @description  Manually mark Instagram posts as seen with silent cross-device synchronization.
 // @author       Xiv
 // @match        *://*.instagram.com/*
@@ -23,6 +23,7 @@
 (function () {
     'use strict';
 
+    // Guard against duplicate initialization in SPA environments
     if (window.__tmIgTrackerInitialized) return;
     window.__tmIgTrackerInitialized = true;
 
@@ -39,7 +40,7 @@
 
     const CONFIG = {
         UI_PREFIX: 'tm-ig-seen',
-        STORAGE_KEY: 'tm_ig_seen_data_v3', 
+        STORAGE_KEY: 'tm_ig_seen_data_v3',
         TOKEN_KEY: 'tm_ig_github_token',
         OBSERVER_DEBOUNCE_MS: 150,
         CLOUD_SYNC_DEBOUNCE_MS: 3000
@@ -87,14 +88,38 @@
     // =========================================================
     const CloudAPI = {
         getToken() {
-            let token = GM_getValue(CONFIG.TOKEN_KEY, null);
-            
-            if (token === null) {
-                token = window.prompt('[Instagram Viewed Post Marker]\n\nPlease enter your GitHub Personal Access Token to enable cloud sync:') || '';
-                GM_setValue(CONFIG.TOKEN_KEY, token.trim());
+            return (GM_getValue(CONFIG.TOKEN_KEY, '') || '').trim();
+        },
+
+        async promptForToken() {
+            const currentToken = this.getToken();
+            const newToken = window.prompt('[Instagram Viewed Post Marker]\n\nEnter your GitHub Personal Access Token to enable cloud sync:\n\n(Leave blank to remove your token)', currentToken);
+
+            if (newToken !== null) {
+                const trimmedToken = newToken.trim();
+
+                // User intentionally cleared the prompt
+                if (trimmedToken === '') {
+                    GM_setValue(CONFIG.TOKEN_KEY, '');
+                    UI.showAuthToast('GitHub Token removed. Sync disabled.', 'error');
+                    return false;
+                }
+
+                GM_setValue(CONFIG.TOKEN_KEY, trimmedToken);
+
+                try {
+                    const cloudData = await this.fetch();
+                    if (cloudData && Object.keys(cloudData).length > 0) {
+                        Storage.mergeData(cloudData);
+                    }
+                    UI.showAuthToast('GitHub Token authenticated and synced successfully!', 'success');
+                } catch (e) {
+                    console.warn(`[IG Tracker] Initial sync failed with new token:`, e);
+                    // The fetch method handles 401/403/400 errors and spawns the error toast
+                }
+                return true;
             }
-            
-            return token.trim();
+            return false;
         },
 
         getHeaders() {
@@ -109,7 +134,10 @@
 
         fetch() {
             return new Promise((resolve, reject) => {
-                if (!this.getToken()) return reject(new Error('No GitHub token configured.'));
+                if (!this.getToken()) {
+                    UI.showAuthToast('GitHub Sync: Token missing. Click to add.', 'error');
+                    return resolve({});
+                }
 
                 GM_xmlhttpRequest({
                     method: 'GET',
@@ -118,10 +146,15 @@
                     responseType: 'json',
                     timeout: 10000,
                     onload: (res) => {
+                        if (res.status === 401 || res.status === 403 || res.status === 400) {
+                            UI.showAuthToast('GitHub Sync: Invalid or expired token. Click to update.', 'error');
+                            return resolve({});
+                        }
+
                         if (res.status === 200) {
                             let data = res.response;
                             if (typeof data === 'string') {
-                                try { data = JSON.parse(data); } 
+                                try { data = JSON.parse(data); }
                                 catch (e) { resolve({}); return; }
                             }
                             resolve(data);
@@ -152,6 +185,11 @@
                     responseType: 'json',
                     timeout: 10000,
                     onload: (res) => {
+                        if (res.status === 401 || res.status === 403 || res.status === 400) {
+                            UI.showAuthToast('GitHub Sync: Invalid or expired token. Click to update.', 'error');
+                            return reject(new Error(`Token rejected by server.`));
+                        }
+
                         if (res.status >= 200 && res.status < 300) resolve();
                         else reject(new Error(`Upload failed: ${res.status}`));
                     },
@@ -187,7 +225,7 @@
             this._saveCloudDebounced = Utils.debounce(() => {
                 this.pushToCloud();
             }, CONFIG.CLOUD_SYNC_DEBOUNCE_MS);
-            
+
             this.setupCrossTabSync();
 
             try {
@@ -261,7 +299,6 @@
         async pushToCloud() {
             try {
                 await CloudAPI.put(this.data);
-                console.log(`[IG Tracker] Synced ${Object.keys(this.data).length} states to GitHub.`);
             } catch (e) {
                 console.error(`[IG Tracker] Cloud push failed:`, e);
             }
@@ -274,11 +311,11 @@
             this.data[shortcode] = { s: newState, t: Date.now() };
             this.saveLocal();
             this._saveCloudDebounced();
-            
+
             document.dispatchEvent(new CustomEvent(`${CONFIG.UI_PREFIX}-sync`, {
                 detail: { shortcode, isSeen: newState }
             }));
-            
+
             return newState;
         },
 
@@ -294,6 +331,7 @@
         injectStyles() {
             const style = document.createElement('style');
             style.textContent = `
+                /* ----------------- GRID STYLES ----------------- */
                 .${CONFIG.UI_PREFIX}-grid-wrapper {
                     position: absolute;
                     inset: 0;
@@ -352,6 +390,7 @@
                     height: 1.2rem; fill: #fff;
                 }
 
+                /* ----------------- ACTION BAR STYLES ----------------- */
                 .${CONFIG.UI_PREFIX}-action-btn {
                     display: flex;
                     align-items: center;
@@ -373,9 +412,68 @@
                 .${CONFIG.UI_PREFIX}-action-btn:active {
                     transform: scale(0.9);
                 }
+
+                /* ----------------- TOAST STYLES ----------------- */
+                .${CONFIG.UI_PREFIX}-toast {
+                    position: fixed;
+                    bottom: 2rem;
+                    right: 2rem;
+                    background: rgba(20, 20, 20, 0.95);
+                    backdrop-filter: blur(10px);
+                    border: 1px solid transparent;
+                    border-left: 4px solid transparent;
+                    color: #fff;
+                    padding: 1rem 1.2rem;
+                    border-radius: 0.6rem;
+                    font-size: 0.9rem;
+                    font-weight: 500;
+                    box-shadow: 0 8px 16px rgba(0,0,0,0.5);
+                    display: flex;
+                    align-items: center;
+                    gap: 1.5rem;
+                    z-index: 999999;
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                    animation: tmToastFadeIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+                    transition: background 0.2s;
+                }
+                .${CONFIG.UI_PREFIX}-toast.error {
+                    border-color: #e57373;
+                    border-left-color: #e57373;
+                    cursor: pointer;
+                }
+                .${CONFIG.UI_PREFIX}-toast.success {
+                    border-color: #4ade80;
+                    border-left-color: #4ade80;
+                    cursor: default;
+                }
+                .${CONFIG.UI_PREFIX}-toast.error:hover {
+                    background: rgba(40, 40, 40, 0.95);
+                }
+                .${CONFIG.UI_PREFIX}-toast button {
+                    background: transparent;
+                    border: none;
+                    color: #aaa;
+                    font-size: 1.2rem;
+                    cursor: pointer;
+                    padding: 0;
+                    line-height: 1;
+                    transition: color 0.2s;
+                    outline: none;
+                }
+                .${CONFIG.UI_PREFIX}-toast button:hover {
+                    color: #fff;
+                }
+                @keyframes tmToastFadeIn {
+                    from { opacity: 0; transform: translateX(20px) scale(0.95); }
+                    to { opacity: 1; transform: translateX(0) scale(1); }
+                }
+                @keyframes tmToastFadeOut {
+                    from { opacity: 1; transform: translateX(0) scale(1); }
+                    to { opacity: 0; transform: translateX(20px) scale(0.95); }
+                }
             `;
             document.head.appendChild(style);
-            
+
             document.addEventListener(`${CONFIG.UI_PREFIX}-sync`, (e) => {
                 const { shortcode, isSeen } = e.detail;
 
@@ -399,6 +497,55 @@
             });
         },
 
+        showAuthToast(message, type = 'error') {
+            // Remove any existing toast smoothly before spawning a new one
+            this.removeAuthToast(null, true);
+
+            const toast = document.createElement('div');
+            toast.id = `${CONFIG.UI_PREFIX}-auth-toast`;
+            toast.className = `${CONFIG.UI_PREFIX}-toast ${type}`;
+
+            const text = document.createElement('span');
+            text.textContent = message;
+            toast.appendChild(text);
+
+            if (type === 'error') {
+                const closeBtn = document.createElement('button');
+                closeBtn.innerHTML = '✕';
+                closeBtn.title = "Dismiss";
+                closeBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    this.removeAuthToast(toast);
+                };
+                toast.appendChild(closeBtn);
+
+                toast.onclick = () => {
+                    CloudAPI.promptForToken();
+                };
+            } else if (type === 'success') {
+                // Auto-dismiss success toast after 3 seconds
+                setTimeout(() => {
+                    this.removeAuthToast(toast);
+                }, 3000);
+            }
+
+            document.body.appendChild(toast);
+        },
+
+        removeAuthToast(specificToast = null, immediate = false) {
+            const toast = specificToast || document.getElementById(`${CONFIG.UI_PREFIX}-auth-toast`);
+            if (toast) {
+                if (immediate) {
+                    toast.remove();
+                    return;
+                }
+                toast.style.animation = 'tmToastFadeOut 0.3s forwards';
+                setTimeout(() => {
+                    if (toast.parentNode) toast.remove();
+                }, 300);
+            }
+        },
+
         injectGridUI(linkEl, shortcode) {
             if (window.getComputedStyle(linkEl).position === 'static') {
                 linkEl.style.position = 'relative';
@@ -413,18 +560,18 @@
             const overlay = document.createElement('div');
             overlay.className = `${CONFIG.UI_PREFIX}-overlay ${isSeen ? 'active' : ''}`;
             overlay.appendChild(Utils.createSVG(ICONS.check));
-            
+
             const btn = document.createElement('button');
             btn.className = `${CONFIG.UI_PREFIX}-grid-btn ${isSeen ? 'active' : ''}`;
             btn.title = "Toggle Seen Status";
             btn.appendChild(Utils.createSVG(ICONS.eye));
-            
+
             btn.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 Storage.toggle(shortcode);
             });
-            
+
             wrapper.appendChild(overlay);
             wrapper.appendChild(btn);
             linkEl.appendChild(wrapper);
@@ -448,13 +595,13 @@
 
             const isSeen = Storage.has(shortcode);
             this.renderActionIcon(btn, isSeen, nativeClass);
-            
+
             btn.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 Storage.toggle(shortcode);
             });
-            
+
             anchorElement.parentNode.insertBefore(btn, anchorElement);
         },
 
@@ -487,7 +634,7 @@
             this.observer = new MutationObserver(Utils.debounce(() => {
                 requestAnimationFrame(() => this.scanAll());
             }, CONFIG.OBSERVER_DEBOUNCE_MS));
-            
+
             this.observer.observe(document.body, { childList: true, subtree: true });
         },
 
@@ -516,7 +663,7 @@
 
         scanActionBar() {
             const saveIcons = document.querySelectorAll(`svg[aria-label="Save"]:not(.${CONFIG.UI_PREFIX}-processed), svg[aria-label="Remove"]:not(.${CONFIG.UI_PREFIX}-processed)`);
-            
+
             saveIcons.forEach(svg => {
                 const container = svg.closest('article')
                     || svg.closest('[role="dialog"]')
@@ -547,7 +694,7 @@
                 }
 
                 if (!anchor) return;
-                
+
                 if (anchor.parentNode && anchor.parentNode.querySelector(`.${CONFIG.UI_PREFIX}-action-btn`)) {
                     svg.classList.add(`${CONFIG.UI_PREFIX}-processed`);
                     return;
@@ -564,12 +711,7 @@
     // =========================================================
     if (typeof GM_registerMenuCommand === 'function') {
         GM_registerMenuCommand('Update GitHub Token', () => {
-            const currentToken = GM_getValue(CONFIG.TOKEN_KEY, '');
-            const newToken = window.prompt('[Instagram Viewed Post Marker]\n\nEnter your new GitHub Personal Access Token:', currentToken);
-            if (newToken !== null) {
-                GM_setValue(CONFIG.TOKEN_KEY, newToken.trim());
-                alert('GitHub Token updated successfully. It will be used on the next cloud sync.');
-            }
+            CloudAPI.promptForToken();
         });
     }
 
