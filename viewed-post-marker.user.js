@@ -2,13 +2,18 @@
 // @name         [Instagram] Viewed Post Marker
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://www.instagram.com/favicon.ico
-// @version      2.3
-// @description  Manually mark Instagram posts as seen with sync across grid, modal, and individual post views.
+// @version      2.5
+// @description  Manually mark Instagram posts as seen with silent cross-device GitHub synchronization.
 // @author       Xiv
 // @match        *://*.instagram.com/*
 // @noframes
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @grant        GM_xmlhttpRequest
+// @grant        GM_addValueChangeListener
+// @connect      api.github.com
+// @connect      raw.githubusercontent.com
+// @connect      *
 // @run-at       document-idle
 // @updateURL    https://myouisaur.github.io/Instagram/viewed-post-marker.user.js
 // @downloadURL  https://myouisaur.github.io/Instagram/viewed-post-marker.user.js
@@ -17,17 +22,26 @@
 (function () {
     'use strict';
 
-    // Guard against duplicate initialization in SPA environments
     if (window.__tmIgTrackerInitialized) return;
     window.__tmIgTrackerInitialized = true;
 
     // =========================================================
-    // CONFIGURATION
+    // HARDCODED CONFIGURATION
     // =========================================================
+    const CLOUD_CONFIG = {
+        WORKER_URL: 'https://ig-viewed-post-marker.myouisaur.workers.dev/',
+        GITHUB_TOKEN: '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',
+        OWNER: 'myouisaur',
+        REPO: 'Instagram',
+        BRANCH: 'main',
+        PATH: 'viewed-post-marker-db.json'
+    };
+
     const CONFIG = {
         UI_PREFIX: 'tm-ig-seen',
-        STORAGE_KEY: 'tm_ig_seen_data_v2',
-        OBSERVER_DEBOUNCE_MS: 150
+        STORAGE_KEY: 'tm_ig_seen_data_v3', // Upgraded schema for cloud sync
+        OBSERVER_DEBOUNCE_MS: 150,
+        CLOUD_SYNC_DEBOUNCE_MS: 3000
     };
 
     const ICONS = {
@@ -46,20 +60,20 @@
                 timeoutId = setTimeout(() => fn.apply(this, args), delay);
             };
         },
+
         createSVG(pathD, viewBox = '0 0 24 24', customClass = '') {
             const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
             svg.setAttribute('viewBox', viewBox);
-
-            // CRITICAL: Explicitly define dimensions to prevent flexbox collapsing
             svg.setAttribute('height', '24');
             svg.setAttribute('width', '24');
-
             if (customClass) svg.setAttribute('class', customClass);
+
             const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
             path.setAttribute('d', pathD);
             svg.appendChild(path);
             return svg;
         },
+
         extractShortcode(url) {
             if (!url) return null;
             const match = url.match(/\/(?:p|reel)\/([a-zA-Z0-9_-]+)/);
@@ -68,57 +82,201 @@
     };
 
     // =========================================================
-    // STORAGE MODULE
+    // CLOUD API ENGINE
+    // =========================================================
+    const CloudAPI = {
+        getHeaders() {
+            return {
+                'X-GitHub-Token': CLOUD_CONFIG.GITHUB_TOKEN,
+                'X-GitHub-Owner': CLOUD_CONFIG.OWNER,
+                'X-GitHub-Repo': CLOUD_CONFIG.REPO,
+                'X-GitHub-Path': CLOUD_CONFIG.PATH,
+                'X-GitHub-Branch': CLOUD_CONFIG.BRANCH
+            };
+        },
+
+        fetch() {
+            return new Promise((resolve, reject) => {
+                GM_xmlhttpRequest({
+                    method: 'GET',
+                    url: CLOUD_CONFIG.WORKER_URL,
+                    headers: this.getHeaders(),
+                    responseType: 'json',
+                    timeout: 10000,
+                    onload: (res) => {
+                        if (res.status === 200) {
+                            let data = res.response;
+                            if (typeof data === 'string') {
+                                try { data = JSON.parse(data); } catch (e) { resolve({}); return; }
+                            }
+                            resolve(data);
+                        } else if (res.status === 404) {
+                            resolve({});
+                        } else {
+                            reject(new Error(`Fetch failed: ${res.status}`));
+                        }
+                    },
+                    onerror: reject,
+                    ontimeout: reject
+                });
+            });
+        },
+
+        put(payloadData) {
+            return new Promise((resolve, reject) => {
+                GM_xmlhttpRequest({
+                    method: 'PUT',
+                    url: CLOUD_CONFIG.WORKER_URL,
+                    headers: {
+                        ...this.getHeaders(),
+                        'Content-Type': 'application/json'
+                    },
+                    data: JSON.stringify(payloadData),
+                    responseType: 'json',
+                    timeout: 10000,
+                    onload: (res) => {
+                        if (res.status >= 200 && res.status < 300) resolve();
+                        else reject(new Error(`Upload failed: ${res.status}`));
+                    },
+                    onerror: reject,
+                    ontimeout: reject
+                });
+            });
+        }
+    };
+
+    // =========================================================
+    // PAGE CONTEXT MODULE
+    // =========================================================
+    const PageContext = {
+        isProfilePage() {
+            const path = window.location.pathname;
+            const excluded = ['/', '/explore', '/reels', '/direct', '/stories', '/accounts'];
+            if (excluded.some(p => path === p || path.startsWith(p + '/'))) return false;
+            if (/^\/(p|reel)\//.test(path)) return false;
+            return true;
+        }
+    };
+
+    // =========================================================
+    // STORAGE & SYNC MODULE
     // =========================================================
     const Storage = {
-        seenSet: new Set(),
+        // Schema: { "shortcode": { s: boolean, t: timestamp } }
+        data: {},
+        _saveCloudDebounced: null,
 
-        init() {
+        async init() {
+            this.loadLocal();
+
+            this._saveCloudDebounced = Utils.debounce(() => {
+                this.pushToCloud();
+            }, CONFIG.CLOUD_SYNC_DEBOUNCE_MS);
+
+            this.setupCrossTabSync();
+
+            // Pull initial state from cloud on load
             try {
-                const rawV2 = GM_getValue(CONFIG.STORAGE_KEY, null);
-                if (!rawV2) {
-                    const rawV1 = GM_getValue('tm_ig_seen_data', '{}');
-                    const dataV1 = JSON.parse(rawV1);
-                    const merged = [];
-                    Object.values(dataV1).forEach(arr => merged.push(...arr));
-                    this.seenSet = new Set(merged);
-                    this.save();
-                } else {
-                    this.seenSet = new Set(JSON.parse(rawV2));
+                const cloudData = await CloudAPI.fetch();
+                if (cloudData && Object.keys(cloudData).length > 0) {
+                    this.mergeData(cloudData);
                 }
             } catch (e) {
-                console.warn(`[IG Tracker] Corrupted storage data. Initializing clean database.`);
-                this.seenSet = new Set();
+                console.warn(`[IG Tracker] Background cloud sync failed:`, e);
             }
         },
 
-        save() {
+        loadLocal() {
             try {
-                GM_setValue(CONFIG.STORAGE_KEY, JSON.stringify([...this.seenSet]));
+                const rawV3 = GM_getValue(CONFIG.STORAGE_KEY, null);
+                if (rawV3) {
+                    this.data = JSON.parse(rawV3);
+                } else {
+                    // Migrate from v2 array to v3 timestamped object
+                    const rawV2 = GM_getValue('tm_ig_seen_data_v2', '[]');
+                    const dataV2 = JSON.parse(rawV2);
+                    const migrated = {};
+                    const now = Date.now();
+
+                    dataV2.forEach(shortcode => {
+                        migrated[shortcode] = { s: true, t: now };
+                    });
+
+                    this.data = migrated;
+                    this.saveLocal();
+                }
             } catch (e) {
-                console.error(`[IG Tracker] Failed to save to local storage:`, e);
+                console.warn(`[IG Tracker] Corrupted storage. Resetting database.`);
+                this.data = {};
+            }
+        },
+
+        saveLocal() {
+            GM_setValue(CONFIG.STORAGE_KEY, JSON.stringify(this.data));
+        },
+
+        mergeData(remoteData) {
+            let changed = false;
+
+            for (const [shortcode, remoteState] of Object.entries(remoteData)) {
+                const localState = this.data[shortcode];
+
+                // If local doesn't have it, or remote is newer, adopt remote
+                if (!localState || remoteState.t > localState.t) {
+                    this.data[shortcode] = remoteState;
+                    changed = true;
+
+                    // Dispatch sync event for UI
+                    document.dispatchEvent(new CustomEvent(`${CONFIG.UI_PREFIX}-sync`, {
+                        detail: { shortcode, isSeen: remoteState.s }
+                    }));
+                }
+            }
+
+            if (changed) {
+                this.saveLocal();
+            }
+        },
+
+        setupCrossTabSync() {
+            if (typeof GM_addValueChangeListener === 'function') {
+                GM_addValueChangeListener(CONFIG.STORAGE_KEY, (key, oldValue, newValue, remote) => {
+                    if (remote) {
+                        try {
+                            const newObj = JSON.parse(newValue || '{}');
+                            this.mergeData(newObj);
+                        } catch (e) {}
+                    }
+                });
+            }
+        },
+
+        async pushToCloud() {
+            try {
+                await CloudAPI.put(this.data);
+                console.log(`[IG Tracker] Synced ${Object.keys(this.data).length} states to GitHub.`);
+            } catch (e) {
+                console.error(`[IG Tracker] Cloud push failed:`, e);
             }
         },
 
         toggle(shortcode) {
-            let isSeen = false;
-            if (this.seenSet.has(shortcode)) {
-                this.seenSet.delete(shortcode);
-            } else {
-                this.seenSet.add(shortcode);
-                isSeen = true;
-            }
-            this.save();
+            const currentState = this.data[shortcode]?.s || false;
+            const newState = !currentState;
+
+            this.data[shortcode] = { s: newState, t: Date.now() };
+            this.saveLocal();
+            this._saveCloudDebounced();
 
             document.dispatchEvent(new CustomEvent(`${CONFIG.UI_PREFIX}-sync`, {
-                detail: { shortcode, isSeen }
+                detail: { shortcode, isSeen: newState }
             }));
 
-            return isSeen;
+            return newState;
         },
 
         has(shortcode) {
-            return this.seenSet.has(shortcode);
+            return this.data[shortcode]?.s === true;
         }
     };
 
@@ -153,8 +311,10 @@
                     transition: opacity 0.2s ease;
                 }
                 .${CONFIG.UI_PREFIX}-overlay.active { opacity: 1; }
+
                 .${CONFIG.UI_PREFIX}-overlay svg {
-                    width: 3.5rem; height: 3.5rem;
+                    width: 3.5rem;
+                    height: 3.5rem;
                     fill: rgba(255, 255, 255, 0.85);
                 }
 
@@ -181,10 +341,10 @@
                     border-color: rgba(74, 222, 128, 1);
                 }
                 .${CONFIG.UI_PREFIX}-grid-btn svg {
-                    width: 1.2rem; height: 1.2rem; fill: #fff;
+                    width: 1.2rem;
+                    height: 1.2rem; fill: #fff;
                 }
 
-                /* Action Bar Button Styles */
                 .${CONFIG.UI_PREFIX}-action-btn {
                     display: flex;
                     align-items: center;
@@ -212,7 +372,6 @@
             document.addEventListener(`${CONFIG.UI_PREFIX}-sync`, (e) => {
                 const { shortcode, isSeen } = e.detail;
 
-                // Sync Grid
                 const gridWrappers = document.querySelectorAll(`.${CONFIG.UI_PREFIX}-grid-wrapper[data-shortcode="${shortcode}"]`);
                 gridWrappers.forEach(wrapper => {
                     const overlay = wrapper.querySelector(`.${CONFIG.UI_PREFIX}-overlay`);
@@ -226,7 +385,6 @@
                     }
                 });
 
-                // Sync Action Bar
                 const actionBtns = document.querySelectorAll(`.${CONFIG.UI_PREFIX}-action-btn[data-shortcode="${shortcode}"]`);
                 actionBtns.forEach(btn => {
                     this.renderActionIcon(btn, isSeen, btn.dataset.svgClass);
@@ -295,7 +453,6 @@
 
         renderActionIcon(btnContainer, isSeen, nativeClass) {
             btnContainer.innerHTML = '';
-
             const svg = Utils.createSVG(ICONS.eye, '0 0 24 24', nativeClass);
 
             if (isSeen) {
@@ -333,12 +490,11 @@
         },
 
         scanGrid() {
+            if (!PageContext.isProfilePage()) return;
+
             const links = document.querySelectorAll(`a[href*="/p/"]:not(.${CONFIG.UI_PREFIX}-processed), a[href*="/reel/"]:not(.${CONFIG.UI_PREFIX}-processed)`);
 
             links.forEach(link => {
-                // EXCLUSION FIX: Verify the link actually contains a media thumbnail.
-                // This ignores purely textual links (like timestamps and comment dates)
-                // to prevent the grid UI from injecting and squishing into tiny inline elements.
                 if (!link.querySelector('img, video')) {
                     link.classList.add(`${CONFIG.UI_PREFIX}-processed`);
                     return;
@@ -356,7 +512,11 @@
             const saveIcons = document.querySelectorAll(`svg[aria-label="Save"]:not(.${CONFIG.UI_PREFIX}-processed), svg[aria-label="Remove"]:not(.${CONFIG.UI_PREFIX}-processed)`);
 
             saveIcons.forEach(svg => {
-                const container = svg.closest('article, [role="dialog"], main, section');
+                const container = svg.closest('article')
+                    || svg.closest('[role="dialog"]')
+                    || svg.closest('main')
+                    || svg.closest('section');
+
                 let shortcode = null;
 
                 if (container) {
@@ -373,7 +533,6 @@
                 if (!shortcode) return;
 
                 let anchor = svg.closest('[aria-disabled="false"]');
-
                 if (!anchor) {
                     anchor = svg.closest('.x1i10hfl');
                     if (anchor && anchor.parentElement && (anchor.parentElement.style.cursor === 'pointer' || anchor.parentElement.getAttribute('role') === 'button')) {
@@ -397,8 +556,9 @@
     // =========================================================
     // BOOTSTRAP
     // =========================================================
-    Storage.init();
-    UI.injectStyles();
-    Scanner.start();
+    Storage.init().then(() => {
+        UI.injectStyles();
+        Scanner.start();
+    });
 
 })();
