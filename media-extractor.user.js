@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         [Instagram] Image Extractor
+// @name         [Instagram] Media Extractor
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://www.instagram.com/favicon.ico
 // @version      7.0
