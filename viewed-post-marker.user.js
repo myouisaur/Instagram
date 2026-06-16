@@ -2,7 +2,7 @@
 // @name         [Instagram] Viewed Post Marker
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://www.instagram.com/favicon.ico
-// @version      3.4
+// @version      3.5
 // @description  Manually mark Instagram posts as seen with silent cross-device GitHub synchronization.
 // @author       Xiv
 // @match        *://*.instagram.com/*
@@ -48,7 +48,12 @@
         SYNC_LOCK_KEY: 'tm_ig_cloud_sync_lock',
         OBSERVER_DEBOUNCE_MS: 150,
         CLOUD_HISTORY_THROTTLE_MS: 30000,
-        CLOUD_FOCUS_THROTTLE_MS: 5000
+        CLOUD_FOCUS_THROTTLE_MS: 5000,
+
+        // --- Visual Settings ---
+        CHECKMARK_SIZE: '7.5rem',
+        CHECKMARK_COLOR: '#4ade80',
+        OVERLAY_DIM_OPACITY: 0.60
     };
 
     const ICONS = {
@@ -99,10 +104,8 @@
         async promptForToken() {
             const currentToken = this.getToken();
             const newToken = window.prompt('[Instagram Viewed Post Marker]\n\nEnter your GitHub Personal Access Token to enable cloud sync:\n\n(Leave blank to remove your token)', currentToken);
-
             if (newToken !== null) {
                 const trimmedToken = newToken.trim();
-
                 // User intentionally cleared the prompt
                 if (trimmedToken === '') {
                     GM_setValue(CONFIG.TOKEN_KEY, '');
@@ -111,7 +114,6 @@
                 }
 
                 GM_setValue(CONFIG.TOKEN_KEY, trimmedToken);
-
                 try {
                     await Storage.fetchCloudBackground(true);
                     UI.showAuthToast('GitHub Token authenticated and synced successfully!', 'success');
@@ -300,7 +302,6 @@
 
         async fetchCloudBackground(force = false, isFocusEvent = false) {
             if (!CloudAPI.getToken()) return;
-
             const now = Date.now();
             const lastFetch = GM_getValue(CONFIG.LAST_FETCH_KEY, 0);
             const isDirty = GM_getValue(CONFIG.DIRTY_KEY, false);
@@ -418,7 +419,6 @@
             try {
                 // PULL-MERGE-PUSH TRANSACTION INSIDE LOCK QUEUE
                 const latestCloudData = await CloudAPI.fetch();
-
                 await this._queueTask(() => this._withLock(async () => {
                     this.loadLocal(); // Get latest offline data from all cross-tabs
                     if (latestCloudData && Object.keys(latestCloudData).length > 0) {
@@ -433,6 +433,7 @@
                 await this._withLock(async () => {
                     GM_setValue(syncLockKey, 0);
                 });
+
                 return 'synced';
             } catch (e) {
                 await this._withLock(async () => {
@@ -492,19 +493,20 @@
                 .${CONFIG.UI_PREFIX}-overlay {
                     position: absolute;
                     inset: 0;
-                    background: rgba(0, 0, 0, 0.5);
+                    background: rgba(0, 0, 0, ${CONFIG.OVERLAY_DIM_OPACITY});
                     display: flex;
                     align-items: center;
                     justify-content: center;
                     opacity: 0;
                     transition: opacity 0.2s ease;
                 }
-                .${CONFIG.UI_PREFIX}-overlay.active { opacity: 1; }
+                .${CONFIG.UI_PREFIX}-overlay.active { opacity: 1;
+                }
 
                 .${CONFIG.UI_PREFIX}-overlay svg {
-                    width: 3.5rem;
-                    height: 3.5rem;
-                    fill: rgba(255, 255, 255, 0.85);
+                    width: ${CONFIG.CHECKMARK_SIZE};
+                    height: ${CONFIG.CHECKMARK_SIZE};
+                    fill: ${CONFIG.CHECKMARK_COLOR};
                 }
 
                 .${CONFIG.UI_PREFIX}-grid-btn {
@@ -608,12 +610,16 @@
                     color: #fff;
                 }
                 @keyframes tmToastFadeIn {
-                    from { opacity: 0; transform: translateX(20px) scale(0.95); }
-                    to { opacity: 1; transform: translateX(0) scale(1); }
+                    from { opacity: 0;
+                    transform: translateX(20px) scale(0.95); }
+                    to { opacity: 1;
+                    transform: translateX(0) scale(1); }
                 }
                 @keyframes tmToastFadeOut {
-                    from { opacity: 1; transform: translateX(0) scale(1); }
-                    to { opacity: 0; transform: translateX(20px) scale(0.95); }
+                    from { opacity: 1;
+                    transform: translateX(0) scale(1); }
+                    to { opacity: 0;
+                    transform: translateX(20px) scale(0.95); }
                 }
             `;
             document.head.appendChild(style);
@@ -628,7 +634,8 @@
                     if (isSeen) {
                         overlay.classList.add('active');
                         btn.classList.add('active');
-                    } else {
+                    }
+                    else {
                         overlay.classList.remove('active');
                         btn.classList.remove('active');
                     }
@@ -643,7 +650,6 @@
 
         showAuthToast(message, type = 'error') {
             this.removeAuthToast(null, true);
-
             const toast = document.createElement('div');
             toast.id = `${CONFIG.UI_PREFIX}-auth-toast`;
             toast.className = `${CONFIG.UI_PREFIX}-toast ${type}`;
@@ -651,7 +657,6 @@
             const text = document.createElement('span');
             text.textContent = message;
             toast.appendChild(text);
-
             if (type === 'error') {
                 const closeBtn = document.createElement('button');
                 closeBtn.innerHTML = '✕';
@@ -675,7 +680,8 @@
         },
 
         removeAuthToast(specificToast = null, immediate = false) {
-            const toast = specificToast || document.getElementById(`${CONFIG.UI_PREFIX}-auth-toast`);
+            const toast = specificToast ||
+            document.getElementById(`${CONFIG.UI_PREFIX}-auth-toast`);
             if (toast) {
                 if (immediate) {
                     toast.remove();
@@ -702,18 +708,15 @@
             const overlay = document.createElement('div');
             overlay.className = `${CONFIG.UI_PREFIX}-overlay ${isSeen ? 'active' : ''}`;
             overlay.appendChild(Utils.createSVG(ICONS.check));
-
             const btn = document.createElement('button');
             btn.className = `${CONFIG.UI_PREFIX}-grid-btn ${isSeen ? 'active' : ''}`;
             btn.title = "Toggle Seen Status";
             btn.appendChild(Utils.createSVG(ICONS.eye));
-
             btn.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 Storage.toggle(shortcode);
             });
-
             wrapper.appendChild(overlay);
             wrapper.appendChild(btn);
             linkEl.appendChild(wrapper);
@@ -737,13 +740,11 @@
 
             const isSeen = Storage.has(shortcode);
             this.renderActionIcon(btn, isSeen, nativeClass);
-
             btn.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 Storage.toggle(shortcode);
             });
-
             anchorElement.parentNode.insertBefore(btn, anchorElement);
         },
 
@@ -782,7 +783,6 @@
                     Storage.fetchCloudBackground(false, true);
                 }
             });
-
             // Background Idle Polling
             setInterval(() => {
                 if (document.visibilityState === 'visible') {
@@ -799,7 +799,6 @@
             this.observer = new MutationObserver(Utils.debounce(() => {
                 requestAnimationFrame(() => this.scanAll());
             }, CONFIG.OBSERVER_DEBOUNCE_MS));
-
             this.observer.observe(document.body, { childList: true, subtree: true });
         },
 
@@ -828,7 +827,6 @@
 
         scanActionBar() {
             const saveIcons = document.querySelectorAll(`svg[aria-label="Save"]:not(.${CONFIG.UI_PREFIX}-processed), svg[aria-label="Remove"]:not(.${CONFIG.UI_PREFIX}-processed)`);
-
             saveIcons.forEach(svg => {
                 const container = svg.closest('article')
                     || svg.closest('[role="dialog"]')
@@ -841,7 +839,7 @@
                     const timeLink = container.querySelector('a[href*="/p/"], a[href*="/reel/"]');
                     if (timeLink) {
                         shortcode = Utils.extractShortcode(timeLink.getAttribute('href'));
-                     }
+                    }
                 }
 
                 if (!shortcode) {
@@ -853,13 +851,13 @@
                 let anchor = svg.closest('[aria-disabled="false"]');
                 if (!anchor) {
                     anchor = svg.closest('.x1i10hfl');
-                    if (anchor && anchor.parentElement && (anchor.parentElement.style.cursor === 'pointer' || anchor.parentElement.getAttribute('role') === 'button')) {
+                    if (anchor && anchor.parentElement && (anchor.parentElement.style.cursor === 'pointer' ||
+                        anchor.parentElement.getAttribute('role') === 'button')) {
                         anchor = anchor.parentElement;
                     }
                 }
 
                 if (!anchor) return;
-
                 if (anchor.parentNode && anchor.parentNode.querySelector(`.${CONFIG.UI_PREFIX}-action-btn`)) {
                     svg.classList.add(`${CONFIG.UI_PREFIX}-processed`);
                     return;
