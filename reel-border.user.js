@@ -2,7 +2,7 @@
 // @name         [Instagram] Reel Border Highlight in Profiles
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://www.instagram.com/favicon.ico
-// @version      1.12
+// @version      2.0
 // @description  Adds a dynamic, completely desynchronized, color-cycling glassmorphic inner glow to Reel thumbnails.
 // @author       Xiv
 // @match        *://*.instagram.com/*
