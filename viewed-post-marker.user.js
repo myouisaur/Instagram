@@ -2,20 +2,21 @@
 // @name         [Instagram] Viewed Post Marker
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://www.instagram.com/favicon.ico
-// @version      3.5
+// @version      3.6
 // @description  Manually mark Instagram posts as seen with silent cross-device GitHub synchronization.
 // @author       Xiv
 // @match        *://*.instagram.com/*
 // @noframes
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @grant        GM_deleteValue
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addValueChangeListener
 // @grant        GM_registerMenuCommand
 // @connect      api.github.com
 // @connect      raw.githubusercontent.com
 // @connect      *
-// @run-at       document-idle
+// @run-at       document-end
 // @updateURL    https://myouisaur.github.io/Instagram/viewed-post-marker.user.js
 // @downloadURL  https://myouisaur.github.io/Instagram/viewed-post-marker.user.js
 // ==/UserScript==
@@ -47,8 +48,12 @@
         MUTEX_KEY: 'tm_ig_global_mutex',
         SYNC_LOCK_KEY: 'tm_ig_cloud_sync_lock',
         OBSERVER_DEBOUNCE_MS: 150,
-        CLOUD_HISTORY_THROTTLE_MS: 30000,
-        CLOUD_FOCUS_THROTTLE_MS: 5000,
+        CLOUD_HISTORY_THROTTLE_MS: 10000,
+        CLOUD_FOCUS_THROTTLE_MS: 2000,
+        CLOUD_REQUEST_TIMEOUT_MS: 15000,
+        CLOUD_RATE_LIMIT_BACKOFF_MS: 60 * 60 * 1000,
+        CLOUD_PUSH_RETRY_LIMIT: 3,
+        LEGACY_STORAGE_KEY: 'tm_ig_seen_data_v2',
 
         // --- Visual Settings ---
         CHECKMARK_SIZE: '7.5rem',
@@ -97,6 +102,22 @@
     // CLOUD API ENGINE
     // =========================================================
     const CloudAPI = {
+        rateLimitResetTime: 0,
+
+        isRateLimited() {
+            return Date.now() < this.rateLimitResetTime;
+        },
+
+        handleRateLimit(status) {
+            if (status === 403 || status === 429) {
+                this.rateLimitResetTime = Date.now() + CONFIG.CLOUD_RATE_LIMIT_BACKOFF_MS;
+                console.warn('[IG Tracker] GitHub API rate limit hit. Pausing cloud sync for 1 hour.');
+                UI.showAuthToast('GitHub Sync: Rate limit reached. Pausing sync for 1 hour.', 'warning');
+                return true;
+            }
+            return false;
+        },
+
         getToken() {
             return (GM_getValue(CONFIG.TOKEN_KEY, '') || '').trim();
         },
@@ -125,20 +146,23 @@
             return false;
         },
 
-        getHeaders() {
+        getHeaders(targetPath = CLOUD_CONFIG.PATH) {
             return {
                 'X-GitHub-Token': this.getToken(),
                 'X-GitHub-Owner': CLOUD_CONFIG.OWNER,
                 'X-GitHub-Repo': CLOUD_CONFIG.REPO,
-                'X-GitHub-Path': CLOUD_CONFIG.PATH,
+                'X-GitHub-Path': targetPath,
                 'X-GitHub-Branch': CLOUD_CONFIG.BRANCH
             };
         },
 
-        fetch() {
+        fetch(targetPath = CLOUD_CONFIG.PATH) {
             return new Promise((resolve, reject) => {
                 if (!this.getToken()) {
                     return resolve({});
+                }
+                if (this.isRateLimited()) {
+                    return reject(new Error('GitHub API is currently rate limited.'));
                 }
 
                 // Append timestamp to bypass aggressive browser GET caching
@@ -147,11 +171,15 @@
                 GM_xmlhttpRequest({
                     method: 'GET',
                     url: cacheBusterUrl,
-                    headers: this.getHeaders(),
+                    headers: this.getHeaders(targetPath),
                     responseType: 'json',
-                    timeout: 10000,
+                    timeout: CONFIG.CLOUD_REQUEST_TIMEOUT_MS,
                     onload: (res) => {
-                        if (res.status === 401 || res.status === 403 || res.status === 400) {
+                        if (this.handleRateLimit(res.status)) {
+                            return reject(new Error('Rate limit hit.'));
+                        }
+
+                        if (res.status === 401 || res.status === 400) {
                             UI.showAuthToast('GitHub Sync: Invalid or expired token. Click to update.', 'error');
                             return resolve({});
                         }
@@ -175,22 +203,27 @@
             });
         },
 
-        put(payloadData) {
+        put(targetPath, payloadData) {
             return new Promise((resolve, reject) => {
                 if (!this.getToken()) return reject(new Error('No GitHub token configured.'));
+                if (this.isRateLimited()) return reject(new Error('GitHub API is currently rate limited.'));
 
                 GM_xmlhttpRequest({
                     method: 'PUT',
                     url: CLOUD_CONFIG.WORKER_URL,
                     headers: {
-                        ...this.getHeaders(),
+                        ...this.getHeaders(targetPath),
                         'Content-Type': 'application/json'
                     },
                     data: JSON.stringify(payloadData),
                     responseType: 'json',
-                    timeout: 10000,
+                    timeout: CONFIG.CLOUD_REQUEST_TIMEOUT_MS,
                     onload: (res) => {
-                        if (res.status === 401 || res.status === 403 || res.status === 400) {
+                        if (this.handleRateLimit(res.status)) {
+                            return reject(new Error('Rate limit hit.'));
+                        }
+
+                        if (res.status === 401 || res.status === 400) {
                             UI.showAuthToast('GitHub Sync: Invalid or expired token. Click to update.', 'error');
                             return reject(new Error(`Token rejected by server.`));
                         }
@@ -301,7 +334,7 @@
         },
 
         async fetchCloudBackground(force = false, isFocusEvent = false) {
-            if (!CloudAPI.getToken()) return;
+            if (!CloudAPI.getToken() || CloudAPI.isRateLimited()) return;
             const now = Date.now();
             const lastFetch = GM_getValue(CONFIG.LAST_FETCH_KEY, 0);
             const isDirty = GM_getValue(CONFIG.DIRTY_KEY, false);
@@ -339,19 +372,37 @@
                 if (rawV3) {
                     this.data = JSON.parse(rawV3);
                 } else {
-                    const rawV2 = GM_getValue('tm_ig_seen_data_v2', '[]');
-                    const dataV2 = JSON.parse(rawV2);
-                    const migrated = {};
-                    const now = Date.now();
-                    dataV2.forEach(shortcode => {
-                        migrated[shortcode] = { s: true, t: now };
-                    });
-                    this.data = migrated;
-                    this.saveLocal();
+                    this.migrateFromLegacy();
                 }
             } catch (e) {
                 console.warn(`[IG Tracker] Corrupted storage. Resetting database.`);
                 this.data = {};
+            }
+        },
+
+        migrateFromLegacy() {
+            const rawV2 = GM_getValue(CONFIG.LEGACY_STORAGE_KEY, '[]');
+            const dataV2 = JSON.parse(rawV2);
+            const migrated = {};
+            const now = Date.now();
+            dataV2.forEach(shortcode => {
+                migrated[shortcode] = { s: true, t: now };
+            });
+            this.data = migrated;
+
+            // Write synchronously (not the debounced saveLocal) so the new schema is
+            // durably persisted before the old key it was migrated from is removed.
+            GM_setValue(CONFIG.STORAGE_KEY, JSON.stringify(this.data));
+            this.cleanupLegacyKey(CONFIG.LEGACY_STORAGE_KEY);
+        },
+
+        cleanupLegacyKey(key) {
+            try {
+                if (typeof GM_deleteValue === 'function' && GM_getValue(key, undefined) !== undefined) {
+                    GM_deleteValue(key);
+                }
+            } catch (e) {
+                console.warn(`[IG Tracker] Failed to clean up legacy storage key: ${key}`, e);
             }
         },
 
@@ -398,6 +449,7 @@
 
         async pushToCloud() {
             if (!CloudAPI.getToken()) return 'skipped';
+            if (CloudAPI.isRateLimited()) return 'skipped';
             const syncLockKey = CONFIG.SYNC_LOCK_KEY;
             let shouldUpload = false;
 
@@ -417,17 +469,35 @@
             if (!shouldUpload) return 'queued';
 
             try {
-                // PULL-MERGE-PUSH TRANSACTION INSIDE LOCK QUEUE
-                const latestCloudData = await CloudAPI.fetch();
-                await this._queueTask(() => this._withLock(async () => {
-                    this.loadLocal(); // Get latest offline data from all cross-tabs
-                    if (latestCloudData && Object.keys(latestCloudData).length > 0) {
-                        this.mergeData(latestCloudData); // Resolves multi-device conflicts instantly
-                    }
-                }));
+                let pushing = true;
+                let loops = 0;
 
-                // Push combined master dataset
-                await CloudAPI.put(this.data);
+                while (pushing && loops < CONFIG.CLOUD_PUSH_RETRY_LIMIT) {
+                    loops++;
+
+                    // PULL-MERGE-PUSH TRANSACTION INSIDE LOCK QUEUE
+                    const latestCloudData = await CloudAPI.fetch();
+                    await this._queueTask(() => this._withLock(async () => {
+                        this.loadLocal(); // Get latest offline data from all cross-tabs
+                        if (latestCloudData && Object.keys(latestCloudData).length > 0) {
+                            this.mergeData(latestCloudData); // Resolves multi-device conflicts instantly
+                        }
+                    }));
+
+                    // Push combined master dataset
+                    await CloudAPI.put(CLOUD_CONFIG.PATH, this.data);
+
+                    // Converge immediately if new local changes landed mid-upload,
+                    // instead of waiting for the next external trigger to retry
+                    await this._withLock(async () => {
+                        if (!GM_getValue(CONFIG.DIRTY_KEY, false)) {
+                            pushing = false;
+                        } else {
+                            GM_setValue(syncLockKey, Date.now());
+                            GM_setValue(CONFIG.DIRTY_KEY, false);
+                        }
+                    });
+                }
 
                 // Release Locks
                 await this._withLock(async () => {
@@ -592,6 +662,11 @@
                     border-left-color: #4ade80;
                     cursor: default;
                 }
+                .${CONFIG.UI_PREFIX}-toast.warning {
+                    border-color: #facc15;
+                    border-left-color: #facc15;
+                    cursor: default;
+                }
                 .${CONFIG.UI_PREFIX}-toast.error:hover {
                     background: rgba(40, 40, 40, 0.95);
                 }
@@ -657,7 +732,7 @@
             const text = document.createElement('span');
             text.textContent = message;
             toast.appendChild(text);
-            if (type === 'error') {
+            if (type === 'error' || type === 'warning') {
                 const closeBtn = document.createElement('button');
                 closeBtn.innerHTML = '✕';
                 closeBtn.title = "Dismiss";
@@ -666,7 +741,9 @@
                     this.removeAuthToast(toast);
                 };
                 toast.appendChild(closeBtn);
+            }
 
+            if (type === 'error') {
                 toast.onclick = () => {
                     CloudAPI.promptForToken();
                 };
@@ -674,6 +751,10 @@
                 setTimeout(() => {
                     this.removeAuthToast(toast);
                 }, 3000);
+            } else if (type === 'warning') {
+                setTimeout(() => {
+                    this.removeAuthToast(toast);
+                }, 6000);
             }
 
             document.body.appendChild(toast);
