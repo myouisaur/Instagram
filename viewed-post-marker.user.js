@@ -2,7 +2,7 @@
 // @name         [Instagram] Viewed Post Marker
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://www.instagram.com/favicon.ico
-// @version      3.6
+// @version      3.7
 // @description  Manually mark Instagram posts as seen with silent cross-device GitHub synchronization.
 // @author       Xiv
 // @match        *://*.instagram.com/*
@@ -58,7 +58,7 @@
         // --- Visual Settings ---
         CHECKMARK_SIZE: '7.5rem',
         CHECKMARK_COLOR: '#4ade80',
-        OVERLAY_DIM_OPACITY: 0.60
+        OVERLAY_DIM_OPACITY: 0.45
     };
 
     const ICONS = {
