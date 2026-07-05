@@ -2,7 +2,7 @@
 // @name         [Instagram] Viewed Post Marker
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://www.instagram.com/favicon.ico
-// @version      3.7
+// @version      3.8
 // @description  Manually mark Instagram posts as seen with silent cross-device GitHub synchronization.
 // @author       Xiv
 // @match        *://*.instagram.com/*
