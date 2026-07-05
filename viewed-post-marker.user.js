@@ -2,7 +2,7 @@
 // @name         [Instagram] Viewed Post Marker
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://www.instagram.com/favicon.ico
-// @version      3.8
+// @version      4.0
 // @description  Manually mark Instagram posts as seen with silent cross-device GitHub synchronization.
 // @author       Xiv
 // @match        *://*.instagram.com/*
@@ -385,9 +385,11 @@
             const dataV2 = JSON.parse(rawV2);
             const migrated = {};
             const now = Date.now();
+
             dataV2.forEach(shortcode => {
                 migrated[shortcode] = { s: true, t: now };
             });
+
             this.data = migrated;
 
             // Write synchronously (not the debounced saveLocal) so the new schema is
@@ -415,8 +417,10 @@
 
         mergeData(remoteData) {
             let changed = false;
+
             for (const [shortcode, remoteState] of Object.entries(remoteData)) {
                 const localState = this.data[shortcode];
+
                 // Timestamp Supremacy: Always accept the newest action
                 if (!localState || remoteState.t > localState.t) {
                     this.data[shortcode] = remoteState;
@@ -450,6 +454,7 @@
         async pushToCloud() {
             if (!CloudAPI.getToken()) return 'skipped';
             if (CloudAPI.isRateLimited()) return 'skipped';
+
             const syncLockKey = CONFIG.SYNC_LOCK_KEY;
             let shouldUpload = false;
 
@@ -570,8 +575,7 @@
                     opacity: 0;
                     transition: opacity 0.2s ease;
                 }
-                .${CONFIG.UI_PREFIX}-overlay.active { opacity: 1;
-                }
+                .${CONFIG.UI_PREFIX}-overlay.active { opacity: 1; }
 
                 .${CONFIG.UI_PREFIX}-overlay svg {
                     width: ${CONFIG.CHECKMARK_SIZE};
@@ -685,16 +689,12 @@
                     color: #fff;
                 }
                 @keyframes tmToastFadeIn {
-                    from { opacity: 0;
-                    transform: translateX(20px) scale(0.95); }
-                    to { opacity: 1;
-                    transform: translateX(0) scale(1); }
+                    from { opacity: 0; transform: translateX(20px) scale(0.95); }
+                    to { opacity: 1; transform: translateX(0) scale(1); }
                 }
                 @keyframes tmToastFadeOut {
-                    from { opacity: 1;
-                    transform: translateX(0) scale(1); }
-                    to { opacity: 0;
-                    transform: translateX(20px) scale(0.95); }
+                    from { opacity: 1; transform: translateX(0) scale(1); }
+                    to { opacity: 0; transform: translateX(20px) scale(0.95); }
                 }
             `;
             document.head.appendChild(style);
@@ -709,8 +709,7 @@
                     if (isSeen) {
                         overlay.classList.add('active');
                         btn.classList.add('active');
-                    }
-                    else {
+                    } else {
                         overlay.classList.remove('active');
                         btn.classList.remove('active');
                     }
@@ -725,6 +724,7 @@
 
         showAuthToast(message, type = 'error') {
             this.removeAuthToast(null, true);
+
             const toast = document.createElement('div');
             toast.id = `${CONFIG.UI_PREFIX}-auth-toast`;
             toast.className = `${CONFIG.UI_PREFIX}-toast ${type}`;
@@ -732,6 +732,7 @@
             const text = document.createElement('span');
             text.textContent = message;
             toast.appendChild(text);
+
             if (type === 'error' || type === 'warning') {
                 const closeBtn = document.createElement('button');
                 closeBtn.innerHTML = '✕';
@@ -761,8 +762,7 @@
         },
 
         removeAuthToast(specificToast = null, immediate = false) {
-            const toast = specificToast ||
-            document.getElementById(`${CONFIG.UI_PREFIX}-auth-toast`);
+            const toast = specificToast || document.getElementById(`${CONFIG.UI_PREFIX}-auth-toast`);
             if (toast) {
                 if (immediate) {
                     toast.remove();
@@ -789,15 +789,18 @@
             const overlay = document.createElement('div');
             overlay.className = `${CONFIG.UI_PREFIX}-overlay ${isSeen ? 'active' : ''}`;
             overlay.appendChild(Utils.createSVG(ICONS.check));
+
             const btn = document.createElement('button');
             btn.className = `${CONFIG.UI_PREFIX}-grid-btn ${isSeen ? 'active' : ''}`;
             btn.title = "Toggle Seen Status";
             btn.appendChild(Utils.createSVG(ICONS.eye));
+
             btn.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 Storage.toggle(shortcode);
             });
+
             wrapper.appendChild(overlay);
             wrapper.appendChild(btn);
             linkEl.appendChild(wrapper);
@@ -821,11 +824,13 @@
 
             const isSeen = Storage.has(shortcode);
             this.renderActionIcon(btn, isSeen, nativeClass);
+
             btn.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 Storage.toggle(shortcode);
             });
+
             anchorElement.parentNode.insertBefore(btn, anchorElement);
         },
 
@@ -864,6 +869,7 @@
                     Storage.fetchCloudBackground(false, true);
                 }
             });
+
             // Background Idle Polling
             setInterval(() => {
                 if (document.visibilityState === 'visible') {
@@ -875,11 +881,13 @@
 
         startScanner() {
             this.scanAll();
+
             if (this.observer) this.observer.disconnect();
 
             this.observer = new MutationObserver(Utils.debounce(() => {
                 requestAnimationFrame(() => this.scanAll());
             }, CONFIG.OBSERVER_DEBOUNCE_MS));
+
             this.observer.observe(document.body, { childList: true, subtree: true });
         },
 
@@ -892,8 +900,13 @@
             if (!PageContext.isProfilePage()) return;
             const links = document.querySelectorAll(`a[href*="/p/"]:not(.${CONFIG.UI_PREFIX}-processed), a[href*="/reel/"]:not(.${CONFIG.UI_PREFIX}-processed)`);
 
+            // Check if we are currently viewing the profile's reels tab specifically
+            const isProfileReelsTab = /^\/[^/]+\/reels\/?$/.test(window.location.pathname);
+
             links.forEach(link => {
-                if (!link.querySelector('img, video')) {
+                // For standard profile grid tabs, strictly require an image or video tag to be present
+                // before attaching the UI to avoid false positives. Bypass this rule for the Reels tab.
+                if (!isProfileReelsTab && !link.querySelector('img, video')) {
                     link.classList.add(`${CONFIG.UI_PREFIX}-processed`);
                     return;
                 }
@@ -902,12 +915,15 @@
                 if (shortcode) {
                     link.classList.add(`${CONFIG.UI_PREFIX}-processed`);
                     UI.injectGridUI(link, shortcode);
+                } else {
+                    link.classList.add(`${CONFIG.UI_PREFIX}-processed`); // Prevent infinite processing loops
                 }
             });
         },
 
         scanActionBar() {
             const saveIcons = document.querySelectorAll(`svg[aria-label="Save"]:not(.${CONFIG.UI_PREFIX}-processed), svg[aria-label="Remove"]:not(.${CONFIG.UI_PREFIX}-processed)`);
+
             saveIcons.forEach(svg => {
                 const container = svg.closest('article')
                     || svg.closest('[role="dialog"]')
@@ -932,13 +948,13 @@
                 let anchor = svg.closest('[aria-disabled="false"]');
                 if (!anchor) {
                     anchor = svg.closest('.x1i10hfl');
-                    if (anchor && anchor.parentElement && (anchor.parentElement.style.cursor === 'pointer' ||
-                        anchor.parentElement.getAttribute('role') === 'button')) {
+                    if (anchor && anchor.parentElement && (anchor.parentElement.style.cursor === 'pointer' || anchor.parentElement.getAttribute('role') === 'button')) {
                         anchor = anchor.parentElement;
                     }
                 }
 
                 if (!anchor) return;
+
                 if (anchor.parentNode && anchor.parentNode.querySelector(`.${CONFIG.UI_PREFIX}-action-btn`)) {
                     svg.classList.add(`${CONFIG.UI_PREFIX}-processed`);
                     return;
@@ -963,4 +979,5 @@
         UI.injectStyles();
         App.start();
     });
+
 })();
