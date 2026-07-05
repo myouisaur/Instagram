@@ -3,7 +3,7 @@
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://www.instagram.com/favicon.ico
 // @version      4.0
-// @description  Manually mark Instagram posts as seen with silent cross-device GitHub synchronization.
+// @description  Manually mark Instagram posts as seen with silent cross-device synchronization.
 // @author       Xiv
 // @match        *://*.instagram.com/*
 // @noframes
