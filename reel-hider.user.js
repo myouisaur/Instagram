@@ -2,7 +2,7 @@
 // @name         [Instagram] Reel Hider
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://www.instagram.com/favicon.ico
-// @version      2.0
+// @version      2.1
 // @description  Replaces profile grid Reels with an interactive, theme-aware frosted-glass placeholder that can be toggled individually or via shortcut.
 // @author       Xiv
 // @match        *://*.instagram.com/*
