@@ -58,7 +58,7 @@
         // --- Visual Settings ---
         CHECKMARK_SIZE: '7.5rem',
         CHECKMARK_COLOR: '#4ade80',
-        OVERLAY_DIM_OPACITY: 0.45
+        OVERLAY_DIM_OPACITY: 0.50
     };
 
     const ICONS = {
