@@ -2,8 +2,8 @@
 // @name         [Instagram] Reel Hider
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://www.instagram.com/favicon.ico
-// @version      2.1
-// @description  Replaces profile grid Reels with an interactive, theme-aware frosted-glass placeholder that can be toggled individually or via shortcut.
+// @version      2.5
+// @description  Replaces profile grid Reels with an interactive, solid-color placeholder to completely kill the curiosity gap, togglable individually or via shortcut.
 // @author       Xiv
 // @match        *://*.instagram.com/*
 // @noframes
@@ -26,11 +26,8 @@
         SHORTCUT_KEY: 'h', // Alt + H
 
         SELECTORS: {
-            // Fallback supports both semantic <main> and ARIA role="main"
             MAIN_CONTAINER: 'main, div[role="main"]',
-            // Selects un-injected reels with images/videos
             NEW_REELS: ':is(main, div[role="main"]) a:is([href*="/reel/"], [href*="/reels/"]):has(img, video):not([data-tm-overlay-injected])',
-            // Selects all injected reels for bulk toggling
             ALL_INJECTED_REELS: 'a[data-tm-overlay-injected="true"]'
         },
 
@@ -40,16 +37,15 @@
         },
 
         THEME: {
-            BLUR_RADIUS: '16px',
             DARK: {
-                BLUR_BG: 'rgba(20, 20, 20, 0.75)',
-                BTN_BG: 'rgba(0, 0, 0, 0.65)',
+                COVER_BG: '#0c1014', // Matches exact IG Dark Mode
+                BTN_BG: 'rgba(30, 30, 30, 0.85)',
                 BTN_TEXT: '#ffffff',
                 BTN_BORDER: 'rgba(255, 255, 255, 0.15)'
             },
             LIGHT: {
-                BLUR_BG: 'rgba(255, 255, 255, 0.65)',
-                BTN_BG: 'rgba(255, 255, 255, 0.85)',
+                COVER_BG: '#FFFFFF', // Matches IG Light Mode
+                BTN_BG: 'rgba(255, 255, 255, 0.95)',
                 BTN_TEXT: '#000000',
                 BTN_BORDER: 'rgba(0, 0, 0, 0.1)'
             }
@@ -60,11 +56,14 @@
         if (CONFIG.DEBUG) console.log('[Instagram Reel Declutter]', ...args);
     };
 
+    const haltEvent = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+    };
+
     // =========================================================
     // STATE & SESSION MANAGEMENT
     // =========================================================
-
-    // Extracts the unique shortcode (e.g., Cxyz123) from the reel URL
     const getReelID = (href) => {
         const match = href.match(/\/reels?\/([^\/?#]+)/);
         return match ? match[1] : null;
@@ -90,18 +89,76 @@
     };
 
     // =========================================================
+    // THEME OBSERVER (Detects manual IG dark mode toggles)
+    // =========================================================
+    const syncThemeState = () => {
+        const html = document.documentElement;
+        let theme = null;
+
+        // 1. Check known Meta/Instagram class attributes (Highly performant)
+        if (html.classList.contains('dark') || html.classList.contains('__fb-dark-mode') || html.getAttribute('data-theme') === 'dark') {
+            theme = 'dark';
+        } else if (html.classList.contains('light') || html.classList.contains('__fb-light-mode') || html.getAttribute('data-theme') === 'light') {
+            theme = 'light';
+        }
+        // 2. Fallback: Calculate brightness ONLY if native classes aren't present (Prevents layout thrashing)
+        else if (document.body) {
+            const bodyBg = window.getComputedStyle(document.body).backgroundColor;
+            const rgb = bodyBg.match(/\d+/g);
+            if (rgb && rgb.length >= 3 && rgb[3] !== '0') {
+                const brightness = (parseInt(rgb[0]) * 299 + parseInt(rgb[1]) * 587 + parseInt(rgb[2]) * 114) / 1000;
+                theme = brightness < 128 ? 'dark' : 'light';
+            }
+        }
+
+        if (theme !== html.dataset.tmTheme) {
+            if (theme) html.dataset.tmTheme = theme;
+            else delete html.dataset.tmTheme;
+            log(`Theme synchronized to: ${theme || 'OS Default'}`);
+        }
+    };
+
+    const initThemeObserver = () => {
+        syncThemeState();
+
+        const observer = new MutationObserver((mutations) => {
+            let shouldUpdate = false;
+            for (const mut of mutations) {
+                if (mut.type === 'attributes' && (mut.attributeName === 'class' || mut.attributeName === 'data-theme' || mut.attributeName === 'style')) {
+                    shouldUpdate = true;
+                    break;
+                }
+            }
+            if (shouldUpdate) requestAnimationFrame(syncThemeState);
+        });
+
+        // Observe HTML element
+        observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme', 'style'] });
+
+        // Observe Body element when ready
+        const observeBody = () => {
+            if (document.body) {
+                observer.observe(document.body, { attributes: true, attributeFilter: ['class', 'style'] });
+                syncThemeState();
+            } else {
+                requestAnimationFrame(observeBody);
+            }
+        };
+        observeBody();
+    };
+
+    // =========================================================
     // ROUTING & PERFORMANCE-SCOPED OBSERVER
     // =========================================================
     const isProfileGridRoute = () => {
         const path = window.location.pathname;
-        if (path === '/' || /^\/(explore|direct|stories|p|reel|reels)\/?/.test(path)) return false;
-        return /^\/[a-zA-Z0-9._]+\/?$/.test(path);
+        if (path === '/' || /^\/(explore|direct|stories)\/?/.test(path)) return false;
+        return true;
     };
 
     let lastUrl = '';
     let gridObserver = null;
 
-    // Connects observer only when on a profile page to save CPU
     const connectGridObserver = () => {
         if (gridObserver) return;
 
@@ -133,12 +190,11 @@
             connectGridObserver();
             requestAnimationFrame(scanForReels);
 
-            // Reconcile existing injected reels with current session storage
             const sessionState = getSessionRevealedSet();
             document.querySelectorAll(CONFIG.SELECTORS.ALL_INJECTED_REELS).forEach(reel => {
                 const id = getReelID(reel.href);
                 const shouldBeRevealed = id && sessionState.has(id);
-                toggleReelState(reel, !shouldBeRevealed, true); // true = skipSessionUpdate
+                toggleReelState(reel, !shouldBeRevealed, true);
             });
         } else {
             delete document.documentElement.dataset.tmHideReels;
@@ -165,14 +221,13 @@
 
         window.addEventListener('popstate', () => requestAnimationFrame(updateRouteState));
 
-        // Fallback router detection
         const observeHead = () => {
             const head = document.querySelector('head');
             if (head) {
-                let timeout;
+                let rafId;
                 new MutationObserver(() => {
-                    clearTimeout(timeout);
-                    timeout = setTimeout(updateRouteState, 50);
+                    cancelAnimationFrame(rafId);
+                    rafId = requestAnimationFrame(updateRouteState);
                 }).observe(head, { childList: true, subtree: true, characterData: true });
             } else {
                 requestAnimationFrame(observeHead);
@@ -215,19 +270,15 @@
     const createOverlay = (reelLink) => {
         reelLink.dataset.tmOverlayInjected = 'true';
 
-        // Initial state logic based on session storage
         const reelID = getReelID(reelLink.href);
         const sessionState = getSessionRevealedSet();
         const startRevealed = reelID && sessionState.has(reelID);
         reelLink.dataset.tmReelState = startRevealed ? 'revealed' : 'hidden';
 
-        // 1. Frosted glass layer
-        const blurLayer = document.createElement('div');
-        blurLayer.className = 'tm-reel-blur-layer';
-        blurLayer.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-        });
+        // 1. Solid color cover layer
+        const coverLayer = document.createElement('div');
+        coverLayer.className = 'tm-reel-cover-layer';
+        coverLayer.addEventListener('click', haltEvent);
 
         // 2. Interactive toggle button
         const toggleBtn = document.createElement('button');
@@ -235,12 +286,11 @@
         toggleBtn.appendChild(createIconSVG(startRevealed ? CONFIG.ICONS.HIDE : CONFIG.ICONS.SHOW));
 
         toggleBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            toggleReelState(reelLink, null); // null forces it to flip its current state
+            haltEvent(e);
+            toggleReelState(reelLink, null);
         });
 
-        reelLink.appendChild(blurLayer);
+        reelLink.appendChild(coverLayer);
         reelLink.appendChild(toggleBtn);
     };
 
@@ -269,12 +319,19 @@
                 const allReels = document.querySelectorAll(CONFIG.SELECTORS.ALL_INJECTED_REELS);
                 if (allReels.length === 0) return;
 
-                // Smart toggle: Check if majority are hidden. If so, reveal all. Otherwise, hide all.
                 let hiddenCount = 0;
                 allReels.forEach(r => { if (r.dataset.tmReelState === 'hidden') hiddenCount++; });
                 const hideAll = hiddenCount < (allReels.length / 2);
 
-                allReels.forEach(reel => toggleReelState(reel, hideAll));
+                // Batch storage update for performance
+                const sessionState = getSessionRevealedSet();
+                allReels.forEach(reel => {
+                    toggleReelState(reel, hideAll, true);
+                    const id = getReelID(reel.href);
+                    if (id) hideAll ? sessionState.delete(id) : sessionState.add(id);
+                });
+                saveSessionRevealedSet(sessionState);
+
                 log(`Bulk toggled ${allReels.length} reels to ${hideAll ? 'hidden' : 'revealed'}.`);
             }
         });
@@ -290,34 +347,43 @@
         style.id = 'tm-reel-declutter-style';
 
         style.textContent = `
+            /* --- DEFAULT (LIGHT MODE) --- */
             :root {
-                --tm-reel-blur-bg: ${CONFIG.THEME.LIGHT.BLUR_BG};
+                --tm-reel-cover-bg: ${CONFIG.THEME.LIGHT.COVER_BG};
                 --tm-reel-btn-bg: ${CONFIG.THEME.LIGHT.BTN_BG};
                 --tm-reel-btn-text: ${CONFIG.THEME.LIGHT.BTN_TEXT};
                 --tm-reel-btn-border: ${CONFIG.THEME.LIGHT.BTN_BORDER};
             }
 
+            /* --- OS DARK MODE (Fallback) --- */
             @media (prefers-color-scheme: dark) {
-                :root {
-                    --tm-reel-blur-bg: ${CONFIG.THEME.DARK.BLUR_BG};
+                html:not([data-tm-theme="light"]) {
+                    --tm-reel-cover-bg: ${CONFIG.THEME.DARK.COVER_BG};
                     --tm-reel-btn-bg: ${CONFIG.THEME.DARK.BTN_BG};
                     --tm-reel-btn-text: ${CONFIG.THEME.DARK.BTN_TEXT};
                     --tm-reel-btn-border: ${CONFIG.THEME.DARK.BTN_BORDER};
                 }
             }
 
-            html[data-tm-hide-reels="true"] ${CONFIG.SELECTORS.MAIN_CONTAINER} a:is([href*="/reel/"], [href*="/reels/"]):has(img, video) {
+            /* --- MANUAL DARK MODE --- */
+            html[data-tm-theme="dark"] {
+                --tm-reel-cover-bg: ${CONFIG.THEME.DARK.COVER_BG} !important;
+                --tm-reel-btn-bg: ${CONFIG.THEME.DARK.BTN_BG} !important;
+                --tm-reel-btn-text: ${CONFIG.THEME.DARK.BTN_TEXT} !important;
+                --tm-reel-btn-border: ${CONFIG.THEME.DARK.BTN_BORDER} !important;
+            }
+
+            /* Scoped using :is() to prevent comma selector leakage */
+            html[data-tm-hide-reels="true"] :is(${CONFIG.SELECTORS.MAIN_CONTAINER}) a:is([href*="/reel/"], [href*="/reels/"]):has(img, video) {
                 position: relative !important;
                 display: block;
             }
 
-            /* --- FROSTED GLASS LAYER --- */
-            .tm-reel-blur-layer {
+            /* --- SOLID COVER LAYER --- */
+            .tm-reel-cover-layer {
                 position: absolute;
                 inset: 0;
-                background-color: var(--tm-reel-blur-bg);
-                backdrop-filter: blur(${CONFIG.THEME.BLUR_RADIUS});
-                -webkit-backdrop-filter: blur(${CONFIG.THEME.BLUR_RADIUS});
+                background-color: var(--tm-reel-cover-bg);
                 z-index: 10;
                 transition: opacity 0.3s ease;
                 border-radius: inherit;
@@ -352,7 +418,7 @@
             }
 
             /* --- STATE: HIDDEN --- */
-            html[data-tm-hide-reels="true"] a[data-tm-reel-state="hidden"] .tm-reel-blur-layer {
+            html[data-tm-hide-reels="true"] a[data-tm-reel-state="hidden"] .tm-reel-cover-layer {
                 opacity: 1;
                 pointer-events: auto;
             }
@@ -362,7 +428,7 @@
             }
 
             /* --- STATE: REVEALED --- */
-            html[data-tm-hide-reels="true"] a[data-tm-reel-state="revealed"] .tm-reel-blur-layer {
+            html[data-tm-hide-reels="true"] a[data-tm-reel-state="revealed"] .tm-reel-cover-layer {
                 opacity: 0;
                 pointer-events: none;
             }
@@ -376,7 +442,7 @@
             }
 
             /* Disable completely when off route */
-            html:not([data-tm-hide-reels="true"]) .tm-reel-blur-layer,
+            html:not([data-tm-hide-reels="true"]) .tm-reel-cover-layer,
             html:not([data-tm-hide-reels="true"]) .tm-reel-toggle-btn {
                 display: none !important;
             }
@@ -389,6 +455,7 @@
     // =========================================================
     try {
         injectStyles();
+        initThemeObserver();
         initRouteObserver();
         initKeyboardShortcuts();
     } catch (error) {
