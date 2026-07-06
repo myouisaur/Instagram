@@ -2,7 +2,7 @@
 // @name         [Instagram] Reel Hider
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://www.instagram.com/favicon.ico
-// @version      2.5
+// @version      2.6
 // @description  Replaces profile grid Reels with an interactive, solid-color placeholder to completely kill the curiosity gap, togglable individually or via shortcut.
 // @author       Xiv
 // @match        *://*.instagram.com/*
@@ -95,14 +95,11 @@
         const html = document.documentElement;
         let theme = null;
 
-        // 1. Check known Meta/Instagram class attributes (Highly performant)
         if (html.classList.contains('dark') || html.classList.contains('__fb-dark-mode') || html.getAttribute('data-theme') === 'dark') {
             theme = 'dark';
         } else if (html.classList.contains('light') || html.classList.contains('__fb-light-mode') || html.getAttribute('data-theme') === 'light') {
             theme = 'light';
-        }
-        // 2. Fallback: Calculate brightness ONLY if native classes aren't present (Prevents layout thrashing)
-        else if (document.body) {
+        } else if (document.body) {
             const bodyBg = window.getComputedStyle(document.body).backgroundColor;
             const rgb = bodyBg.match(/\d+/g);
             if (rgb && rgb.length >= 3 && rgb[3] !== '0') {
@@ -132,10 +129,8 @@
             if (shouldUpdate) requestAnimationFrame(syncThemeState);
         });
 
-        // Observe HTML element
         observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme', 'style'] });
 
-        // Observe Body element when ready
         const observeBody = () => {
             if (document.body) {
                 observer.observe(document.body, { attributes: true, attributeFilter: ['class', 'style'] });
@@ -162,14 +157,15 @@
     const connectGridObserver = () => {
         if (gridObserver) return;
 
-        const target = document.querySelector(CONFIG.SELECTORS.MAIN_CONTAINER) || document.body;
+        // Attaching to document.body ensures the observer survives React
+        // completely destroying and replacing the <main> container on navigation.
         gridObserver = new MutationObserver((mutations) => {
             if (mutations.some(m => m.addedNodes.length > 0)) {
                 requestAnimationFrame(scanForReels);
             }
         });
 
-        gridObserver.observe(target, { childList: true, subtree: true });
+        gridObserver.observe(document.body, { childList: true, subtree: true });
         log('Grid observer connected.');
     };
 
@@ -185,10 +181,18 @@
         if (currentUrl === lastUrl) return;
         lastUrl = currentUrl;
 
+        // Force a clean reset of the observer to prevent holding dead DOM references
+        disconnectGridObserver();
+
         if (isProfileGridRoute()) {
             document.documentElement.dataset.tmHideReels = 'true';
             connectGridObserver();
+
+            // Staggered micro-delays to flawlessly catch React's asynchronous rendering
             requestAnimationFrame(scanForReels);
+            setTimeout(scanForReels, 150);
+            setTimeout(scanForReels, 400);
+            setTimeout(scanForReels, 800);
 
             const sessionState = getSessionRevealedSet();
             document.querySelectorAll(CONFIG.SELECTORS.ALL_INJECTED_REELS).forEach(reel => {
@@ -198,7 +202,6 @@
             });
         } else {
             delete document.documentElement.dataset.tmHideReels;
-            disconnectGridObserver();
         }
     };
 
@@ -323,7 +326,6 @@
                 allReels.forEach(r => { if (r.dataset.tmReelState === 'hidden') hiddenCount++; });
                 const hideAll = hiddenCount < (allReels.length / 2);
 
-                // Batch storage update for performance
                 const sessionState = getSessionRevealedSet();
                 allReels.forEach(reel => {
                     toggleReelState(reel, hideAll, true);
