@@ -2,7 +2,7 @@
 // @name         [Instagram] Media Extractor
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://www.instagram.com/favicon.ico
-// @version      7.0
+// @version      7.1
 // @description  Extracts and downloads the highest-resolution images, videos, and audio-stories directly from the Instagram feed, reels, and stories.
 // @author       Xiv
 // @match        *://*.instagram.com/*
@@ -50,7 +50,8 @@
             APP_ID: '936619743392459',
             MEDIA_INFO_URL: 'https://www.instagram.com/api/v1/media/%id%/info/',
             TIMEOUT_MS: 10000,
-            MAX_RETRIES: 2
+            MAX_RETRIES: 2,
+            MAX_STANDARD_WIDTH: 1080 // Instagram's standard high-res image width
         },
         HEADERS: {
             CACHE_KEY: 'xiv_ig_optional_headers',
@@ -105,7 +106,7 @@
             /* ── Container ──────────────────────────────── */
             body .${CLASSES.CONTAINER} {
                 position: absolute;
-                z-index: 2147483647 !important; /* Punch through Instagram video overlays */
+                z-index: 2147483647 !important;
                 display: flex;
                 gap: 8px;
                 pointer-events: none;
@@ -125,21 +126,18 @@
                 transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             }
 
-            /* Feed Post / Modal Placement (Bottom-Center) */
             body .${CLASSES.FEED_BTN} {
                 bottom: 30px;
                 left: 50%;
                 transform: translateX(-50%);
             }
 
-            /* Stories Placement */
             body .${CLASSES.STORY_BTN} {
                 bottom: clamp(70px, 5%, 110px);
                 left: 50%;
                 transform: translateX(-50%);
             }
 
-            /* Native Reels Action Bar Placement (Top of Bar) */
             body .${CLASSES.REEL_BTN} {
                 position: relative;
                 flex-direction: column;
@@ -217,7 +215,6 @@
                 transition: background 0.35s ease;
             }
 
-            /* Hover & Active states */
             body .${CLASSES.BTN}:hover {
                 background: rgba(255, 255, 255, 0.22);
                 backdrop-filter: blur(32px) saturate(210%) brightness(1.18);
@@ -260,7 +257,8 @@
 
             /* Morph Transitions & Spinner */
             body .${CLASSES.ICON_INNER} {
-                display: flex; align-items: center; justify-content: center; width: 100%; height: 100%;
+                display: flex;
+                align-items: center; justify-content: center; width: 100%; height: 100%;
                 transition: opacity 0.15s ease, transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
                 transform-origin: center;
             }
@@ -273,44 +271,53 @@
 
             /* Inner glass layers */
             body .${CLASSES.GLASS_LENS} {
-                position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 50%;
+                position: absolute;
+                inset: 0; width: 100%; height: 100%; border-radius: 50%;
                 background: radial-gradient(circle at 72% 56%, rgba(255,255,255,0.22) 0%, rgba(255,255,255,0.06) 45%, rgba(180,200,255,0.04) 80%, rgba(0,0,0,0) 100%);
                 pointer-events: none; z-index: 1;
             }
             body .${CLASSES.GLASS_SCATTER} {
-                position: absolute; inset: 2px; border-radius: 50%;
+                position: absolute;
+                inset: 2px; border-radius: 50%;
                 background: radial-gradient(ellipse 60% 50% at 38% 40%, rgba(255,255,255,0.09) 0%, transparent 65%);
                 pointer-events: none; z-index: 2;
             }
             body .${CLASSES.GLASS_CHROMA} {
-                position: absolute; inset: 0; border-radius: 50%;
+                position: absolute;
+                inset: 0; border-radius: 50%;
                 background: radial-gradient(ellipse 100% 100% at 50% 50%, transparent 62%, rgba(80,200,255,0.09) 74%, rgba(255,80,100,0.07) 84%, transparent 92%);
                 pointer-events: none; z-index: 3;
             }
             body .${CLASSES.GLASS_RIM} {
-                position: absolute; bottom: 0; left: 10%; right: 10%; height: 40%;
+                position: absolute;
+                bottom: 0; left: 10%; right: 10%; height: 40%;
                 background: radial-gradient(ellipse 80% 100% at 50% 115%, rgba(255,255,255,0.26) 0%, rgba(255,255,255,0.08) 45%, transparent 70%);
                 border-radius: 0 0 50% 50%; pointer-events: none; z-index: 4;
             }
 
             /* Ripple */
             body .${CLASSES.RIPPLE} {
-                position: absolute; border-radius: 50%; background: rgba(255, 255, 255, 0.28);
+                position: absolute;
+                border-radius: 50%; background: rgba(255, 255, 255, 0.28);
                 transform: scale(0); animation: xiv-ripple 0.55s cubic-bezier(0.22, 1, 0.36, 1) forwards;
-                pointer-events: none; z-index: 7;
+                pointer-events: none;
+                z-index: 7;
             }
             @keyframes xiv-ripple { to { transform: scale(2.8); opacity: 0; } }
 
             /* Progress & Toasts */
             .${CLASSES.PROGRESS} {
-                font-size: 11px; font-weight: 700; font-family: system-ui, -apple-system, sans-serif; letter-spacing: -0.5px;
+                font-size: 11px;
+                font-weight: 700; font-family: system-ui, -apple-system, sans-serif; letter-spacing: -0.5px;
             }
             #${CLASSES.TOAST_CONTAINER} {
-                position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+                position: fixed;
+                bottom: 24px; left: 50%; transform: translateX(-50%);
                 z-index: 2147483647 !important; display: flex; flex-direction: column; gap: 8px; pointer-events: none;
             }
             .${CLASSES.TOAST} {
-                background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+                background: rgba(0, 0, 0, 0.7);
+                backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
                 color: #ffffff; padding: 12px 24px; border-radius: 30px; font-size: 14px; font-family: system-ui, -apple-system, sans-serif;
                 border: 1px solid rgba(255, 255, 255, 0.15); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2); opacity: 0; transform: translateY(20px);
                 transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
@@ -426,7 +433,7 @@
     };
 
     // ==========================================
-    // 4. INSTAGRAM MULTI-TIER API (WITH EXPONENTIAL BACKOFF)
+    // 4. INSTAGRAM UNIVERSAL MEDIA API
     // ==========================================
 
     const API = {
@@ -446,16 +453,16 @@
             }
         },
 
-        getRobustVideoUrl(postId, shortcode) {
+        getRobustMediaUrl(postId, shortcode, isVideo, specificMediaId = null) {
             if (!postId && !shortcode) return Promise.reject(new Error('No post identifier provided'));
-            const key = postId || shortcode;
+            const key = `${postId || shortcode}_${isVideo}_${specificMediaId || 'main'}`;
 
             if (this._inFlight.has(key)) return this._inFlight.get(key);
 
             const promise = new Promise(async (resolve, reject) => {
                 if (postId) {
                     try {
-                        const url = await this._fetchWithRetry(() => this._fetchMediaInfo(postId));
+                        const url = await this._fetchWithRetry(() => this._fetchMediaInfo(postId, isVideo, specificMediaId));
                         if (url) return resolve(url);
                     } catch (e) {
                         warn('Tier 1 API failed after retries:', e.message);
@@ -463,7 +470,7 @@
                 }
                 if (shortcode) {
                     try {
-                        const url = await this._fetchWithRetry(() => this._fetchJsonTrick(shortcode));
+                        const url = await this._fetchWithRetry(() => this._fetchJsonTrick(shortcode, isVideo, specificMediaId));
                         if (url) return resolve(url);
                     } catch (e) {
                         warn('Tier 2 Endpoint Trick failed after retries:', e.message);
@@ -492,7 +499,7 @@
             return headers;
         },
 
-        _fetchMediaInfo(postId) {
+        _fetchMediaInfo(postId, isVideo, mediaId) {
             return new Promise((resolve, reject) => {
                 const url = CONFIG.API.MEDIA_INFO_URL.replace('%id%', postId);
                 GM_xmlhttpRequest({
@@ -507,9 +514,9 @@
                             const data = JSON.parse(res.responseText);
                             const item = data?.items?.[0];
                             if (!item) return reject(new Error('EMPTY_RESPONSE'));
-                            const videoUrl = this._extractVideoUrl(item);
-                            if (!videoUrl) return reject(new Error('NO_VIDEO_URL'));
-                            resolve(videoUrl);
+                            const robustUrl = this._extractMediaUrl(item, isVideo, mediaId);
+                            if (!robustUrl) return reject(new Error('NO_MEDIA_URL_FOUND'));
+                            resolve(robustUrl);
                         } catch (e) {
                             reject(new Error('PARSE_ERROR'));
                         }
@@ -520,7 +527,7 @@
             });
         },
 
-        _fetchJsonTrick(shortcode) {
+        _fetchJsonTrick(shortcode, isVideo, mediaId) {
             return new Promise((resolve, reject) => {
                 GM_xmlhttpRequest({
                     method: 'GET',
@@ -533,9 +540,9 @@
                             const data = JSON.parse(res.responseText);
                             const item = data?.items?.[0] || data?.graphql?.shortcode_media;
                             if (!item) return reject(new Error('EMPTY_JSON_RESPONSE'));
-                            const videoUrl = this._extractVideoUrl(item);
-                            if (!videoUrl) return reject(new Error('NO_VIDEO_URL'));
-                            resolve(videoUrl);
+                            const robustUrl = this._extractMediaUrl(item, isVideo, mediaId);
+                            if (!robustUrl) return reject(new Error('NO_MEDIA_URL_FOUND'));
+                            resolve(robustUrl);
                         } catch (e) {
                             reject(new Error('JSON_PARSE_ERROR'));
                         }
@@ -546,23 +553,34 @@
             });
         },
 
-        _extractVideoUrl(item) {
-            if (Array.isArray(item.carousel_media) || item.edge_sidecar_to_children?.edges) {
-                const slides = item.carousel_media || item.edge_sidecar_to_children.edges;
-                for (const slide of slides) {
-                    const mediaNode = slide.node || slide;
-                    const url = this._pickVideoFromMedia(mediaNode);
-                    if (url) return url;
-                }
-                return null;
-            }
-            return this._pickVideoFromMedia(item);
-        },
+        _extractMediaUrl(item, isVideo, specificMediaId) {
+            let targetMedia = item;
 
-        _pickVideoFromMedia(media) {
-            if (media.video_url) return media.video_url;
-            if (Array.isArray(media.video_versions) && media.video_versions.length) {
-                return media.video_versions.slice().sort((a, b) => (b.width || 0) - (a.width || 0))[0]?.url || null;
+            // Navigate into carousel if applicable
+            if (item.carousel_media || item.edge_sidecar_to_children?.edges) {
+                const slides = item.carousel_media || item.edge_sidecar_to_children.edges;
+                if (specificMediaId) {
+                    const slide = slides.find(s => {
+                        const n = s.node || s;
+                        const slideId = String(n.id || n.pk).split('_')[0];
+                        return slideId === String(specificMediaId);
+                    });
+                    if (slide) targetMedia = slide.node || slide;
+                } else {
+                    targetMedia = slides[0].node || slides[0];
+                }
+            }
+
+            if (isVideo) {
+                if (targetMedia.video_url) return targetMedia.video_url;
+                if (Array.isArray(targetMedia.video_versions) && targetMedia.video_versions.length) {
+                    return targetMedia.video_versions.slice().sort((a, b) => (b.width || 0) - (a.width || 0))[0]?.url || null;
+                }
+            } else {
+                if (Array.isArray(targetMedia.image_versions2?.candidates) && targetMedia.image_versions2.candidates.length) {
+                    return targetMedia.image_versions2.candidates.slice().sort((a, b) => (b.width || 0) - (a.width || 0))[0]?.url || null;
+                }
+                if (targetMedia.display_url) return targetMedia.display_url;
             }
             return null;
         }
@@ -574,7 +592,7 @@
 
     const Extractor = {
         getMediaData(element) {
-            let result = { url: null, videoUrl: null, isVideo: false, postId: null, shortcode: null };
+            let result = { url: null, width: null, videoUrl: null, isVideo: false, postId: null, shortcode: null, mediaId: null };
             try {
                 let currentEl = element;
                 let depth = 0;
@@ -585,6 +603,7 @@
                         k.startsWith('__reactProps$') ||
                         k.startsWith('__reactInternalInstance$')
                     );
+
                     if (fiberKey) {
                         let node = currentEl[fiberKey];
                         let fiberDepth = 0;
@@ -601,6 +620,11 @@
                                     if (pk && !result.postId) result.postId = String(pk).split('_')[0];
                                     if (!result.shortcode) result.shortcode = source.shortcode || source.code;
 
+                                    // Extract slide-specific ID (vital for targeting carousel images during an API upgrade)
+                                    if (!result.mediaId && (source.id || source.pk)) {
+                                        result.mediaId = String(source.id || source.pk).split('_')[0];
+                                    }
+
                                     const isVideo = Boolean(source.video_versions || source.is_video || source.media_type === 2);
                                     if (isVideo) result.isVideo = true;
 
@@ -609,7 +633,9 @@
                                     }
 
                                     if (source.image_versions2?.candidates?.length && !result.url) {
-                                        result.url = source.image_versions2.candidates.sort((a, b) => b.width - a.width)[0].url;
+                                        const best = source.image_versions2.candidates.sort((a, b) => b.width - a.width)[0];
+                                        result.url = best.url;
+                                        result.width = best.width;
                                     }
                                 }
                             }
@@ -824,6 +850,7 @@
             const scatter = document.createElement('div'); scatter.className = CLASSES.GLASS_SCATTER;
             const chroma = document.createElement('div'); chroma.className = CLASSES.GLASS_CHROMA;
             const rim = document.createElement('div'); rim.className = CLASSES.GLASS_RIM;
+
             const iconWrapper = document.createElement('span');
             iconWrapper.className = CLASSES.ICON_WRAPPER;
             const innerIconEl = document.createElement('div');
@@ -850,12 +877,14 @@
                 btn.appendChild(rpl);
                 rpl.addEventListener('animationend', () => rpl.remove());
             });
+
             btn.addEventListener('click', () => onClickAction(btn, iconWrapper));
             btn.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                     e.stopPropagation(); e.preventDefault(); onClickAction(btn, iconWrapper);
                 }
             });
+
             return btn;
         },
 
@@ -866,12 +895,14 @@
                 btnContainer.classList.add(CLASSES.VISIBLE);
                 State.activeHoverContext = { btnContainer };
             });
+
             hoverTarget.addEventListener('mouseleave', () => {
                 btnContainer.classList.remove(CLASSES.VISIBLE);
                 if (State.activeHoverContext?.btnContainer === btnContainer) {
                     State.activeHoverContext = null;
                 }
             });
+
             if (hoverTarget.matches(':hover')) {
                 btnContainer.classList.add(CLASSES.VISIBLE);
                 State.activeHoverContext = { btnContainer };
@@ -911,32 +942,46 @@
                 const ctx = getContextData();
                 if (!ctx) throw new Error('Could not resolve media context');
 
-                let { postId, shortcode, isVideo, videoUrl, url: imageUrl, mediaElement, prefix } = ctx;
-
+                let { postId, shortcode, isVideo, videoUrl, url: imageUrl, mediaElement, prefix, mediaId, width } = ctx;
                 if (!postId && shortcode) postId = shortcodeToPostId(shortcode);
 
                 let finalUrl = null;
                 const filename = Media.generateFilename(prefix || 'feed', isVideo ? 'mp4' : 'jpg');
+                let needsApiUpgrade = false;
 
+                // 1. Evaluate if we need to bypass local DOM/Fiber for a better resolution
                 if (isVideo) {
-                    if (videoUrl && !videoUrl.startsWith('blob:')) {
-                        finalUrl = videoUrl;
-                    } else {
-                        try {
-                            finalUrl = await API.getRobustVideoUrl(postId, shortcode);
-                        } catch (e) {
-                            warn('Backend fetch failed, relying on media element', e);
-                            finalUrl = mediaElement ? mediaElement.src : null;
-                        }
-                    }
+                    if (!videoUrl || videoUrl.startsWith('blob:')) needsApiUpgrade = true;
                 } else {
-                    finalUrl = Media.resolveBestUrl(mediaElement, imageUrl);
+                    if (!width || width < CONFIG.API.MAX_STANDARD_WIDTH) needsApiUpgrade = true;
+                }
+
+                // 2. Fetch maximum uncompressed resolution from backend if constrained by modal view
+                if (needsApiUpgrade && (postId || shortcode)) {
+                    try {
+                        const upgradeUrl = await API.getRobustMediaUrl(postId, shortcode, isVideo, mediaId);
+                        if (upgradeUrl) {
+                            finalUrl = upgradeUrl;
+                        }
+                    } catch (e) {
+                        warn('Backend resolution upgrade failed, falling back to local DOM state', e);
+                    }
+                }
+
+                // 3. Fallback to local DOM/Fiber state if backend bypass wasn't needed or failed
+                if (!finalUrl) {
+                    if (isVideo) {
+                        finalUrl = videoUrl && !videoUrl.startsWith('blob:') ? videoUrl : (mediaElement ? mediaElement.src : null);
+                    } else {
+                        finalUrl = Media.resolveBestUrl(mediaElement, imageUrl);
+                    }
                 }
 
                 if (!finalUrl || finalUrl.startsWith('blob:')) {
                     throw new Error('Invalid or protected URL resolved');
                 }
 
+                // 4. Action Delivery
                 if (actionType === 'link') {
                     if (typeof GM_openInTab === 'function') {
                         GM_openInTab(finalUrl, { active: false, insert: true });
@@ -957,6 +1002,7 @@
                 }
 
                 await UI.swapIconSmoothly(iconWrapper, ASSETS.ICONS.CHECK);
+
                 setTimeout(async () => {
                     await UI.swapIconSmoothly(iconWrapper, actionType === 'link' ? ASSETS.ICONS.LINK : ASSETS.ICONS.DOWNLOAD);
                     delete btnEl.dataset.loading;
@@ -990,7 +1036,6 @@
             return true;
         },
 
-        // Strategy 1: Feed & Modals (Elevated Wrapper Injection)
         processFeed() {
             const medias = document.querySelectorAll(`
                 article img, article video,
@@ -1001,7 +1046,6 @@
             medias.forEach(media => {
                 if (!this.isValidMedia(media)) return;
 
-                // Ensure we skip Reels processing here to prevent overlapping
                 if (window.location.pathname.includes('/reel') && !media.closest('article, [role="dialog"]')) {
                     return;
                 }
@@ -1076,14 +1120,11 @@
             });
         },
 
-        // Strategy 2: Reels (Native Action Bar Injection - Exactly as in v6.1)
         processReels() {
             if (!window.location.pathname.includes('/reel')) return;
-
             const actionIcons = document.querySelectorAll('svg[aria-label="Share Post"], svg[aria-label="Share"], svg[aria-label="Comment"]');
 
             actionIcons.forEach(svg => {
-                // Strict isolation: Prevent injecting ghost buttons into background feeds or modals while URL says /reel/
                 if (svg.closest('article, [role="dialog"]')) return;
 
                 let actionBar = svg.closest('[role="button"]')?.parentElement;
@@ -1118,10 +1159,8 @@
             });
         },
 
-        // Strategy 3: Stories (Static Viewer Injection)
         processStories() {
             if (!window.location.pathname.includes('/stories/')) return;
-
             const medias = Array.from(document.querySelectorAll('img, video')).filter(el => {
                 const rect = el.getBoundingClientRect();
                 return rect.width > 150 && rect.height > 150;
