@@ -2,7 +2,7 @@
 // @name         [Instagram] Media Extractor
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://www.instagram.com/favicon.ico
-// @version      7.1
+// @version      7.5
 // @description  Extracts and downloads the highest-resolution images, videos, and audio-stories directly from the Instagram feed, reels, and stories.
 // @author       Xiv
 // @match        *://*.instagram.com/*
@@ -50,8 +50,7 @@
             APP_ID: '936619743392459',
             MEDIA_INFO_URL: 'https://www.instagram.com/api/v1/media/%id%/info/',
             TIMEOUT_MS: 10000,
-            MAX_RETRIES: 2,
-            MAX_STANDARD_WIDTH: 1080 // Instagram's standard high-res image width
+            MAX_RETRIES: 2
         },
         HEADERS: {
             CACHE_KEY: 'xiv_ig_optional_headers',
@@ -453,16 +452,16 @@
             }
         },
 
-        getRobustMediaUrl(postId, shortcode, isVideo, specificMediaId = null) {
+        getRobustMediaUrl(postId, shortcode, isVideo, targetFingerprint = null) {
             if (!postId && !shortcode) return Promise.reject(new Error('No post identifier provided'));
-            const key = `${postId || shortcode}_${isVideo}_${specificMediaId || 'main'}`;
+            const key = `${postId || shortcode}_${isVideo}_${targetFingerprint || 'main'}`;
 
             if (this._inFlight.has(key)) return this._inFlight.get(key);
 
             const promise = new Promise(async (resolve, reject) => {
                 if (postId) {
                     try {
-                        const url = await this._fetchWithRetry(() => this._fetchMediaInfo(postId, isVideo, specificMediaId));
+                        const url = await this._fetchWithRetry(() => this._fetchMediaInfo(postId, isVideo, targetFingerprint));
                         if (url) return resolve(url);
                     } catch (e) {
                         warn('Tier 1 API failed after retries:', e.message);
@@ -470,7 +469,7 @@
                 }
                 if (shortcode) {
                     try {
-                        const url = await this._fetchWithRetry(() => this._fetchJsonTrick(shortcode, isVideo, specificMediaId));
+                        const url = await this._fetchWithRetry(() => this._fetchJsonTrick(shortcode, isVideo, targetFingerprint));
                         if (url) return resolve(url);
                     } catch (e) {
                         warn('Tier 2 Endpoint Trick failed after retries:', e.message);
@@ -499,7 +498,7 @@
             return headers;
         },
 
-        _fetchMediaInfo(postId, isVideo, mediaId) {
+        _fetchMediaInfo(postId, isVideo, targetFingerprint) {
             return new Promise((resolve, reject) => {
                 const url = CONFIG.API.MEDIA_INFO_URL.replace('%id%', postId);
                 GM_xmlhttpRequest({
@@ -514,7 +513,7 @@
                             const data = JSON.parse(res.responseText);
                             const item = data?.items?.[0];
                             if (!item) return reject(new Error('EMPTY_RESPONSE'));
-                            const robustUrl = this._extractMediaUrl(item, isVideo, mediaId);
+                            const robustUrl = this._extractMediaUrl(item, isVideo, targetFingerprint);
                             if (!robustUrl) return reject(new Error('NO_MEDIA_URL_FOUND'));
                             resolve(robustUrl);
                         } catch (e) {
@@ -527,7 +526,7 @@
             });
         },
 
-        _fetchJsonTrick(shortcode, isVideo, mediaId) {
+        _fetchJsonTrick(shortcode, isVideo, targetFingerprint) {
             return new Promise((resolve, reject) => {
                 GM_xmlhttpRequest({
                     method: 'GET',
@@ -540,7 +539,7 @@
                             const data = JSON.parse(res.responseText);
                             const item = data?.items?.[0] || data?.graphql?.shortcode_media;
                             if (!item) return reject(new Error('EMPTY_JSON_RESPONSE'));
-                            const robustUrl = this._extractMediaUrl(item, isVideo, mediaId);
+                            const robustUrl = this._extractMediaUrl(item, isVideo, targetFingerprint);
                             if (!robustUrl) return reject(new Error('NO_MEDIA_URL_FOUND'));
                             resolve(robustUrl);
                         } catch (e) {
@@ -553,19 +552,28 @@
             });
         },
 
-        _extractMediaUrl(item, isVideo, specificMediaId) {
+        _extractMediaUrl(item, isVideo, targetFingerprint) {
             let targetMedia = item;
 
-            // Navigate into carousel if applicable
             if (item.carousel_media || item.edge_sidecar_to_children?.edges) {
                 const slides = item.carousel_media || item.edge_sidecar_to_children.edges;
-                if (specificMediaId) {
-                    const slide = slides.find(s => {
-                        const n = s.node || s;
-                        const slideId = String(n.id || n.pk).split('_')[0];
-                        return slideId === String(specificMediaId);
+
+                if (targetFingerprint) {
+                    const matchedSlide = slides.find(slide => {
+                        const n = slide.node || slide;
+                        const urls = [];
+                        if (n.image_versions2?.candidates) urls.push(...n.image_versions2.candidates.map(c => c.url));
+                        if (n.video_versions) urls.push(...n.video_versions.map(v => v.url));
+                        if (n.display_url) urls.push(n.display_url);
+
+                        return urls.some(u => {
+                            try {
+                                if (!u || u.startsWith('data:') || u.startsWith('blob:')) return false;
+                                return new URL(u, 'https://instagram.com').pathname.endsWith('/' + targetFingerprint);
+                            } catch(e) { return false; }
+                        });
                     });
-                    if (slide) targetMedia = slide.node || slide;
+                    targetMedia = matchedSlide ? (matchedSlide.node || matchedSlide) : (slides[0].node || slides[0]);
                 } else {
                     targetMedia = slides[0].node || slides[0];
                 }
@@ -592,7 +600,7 @@
 
     const Extractor = {
         getMediaData(element) {
-            let result = { url: null, width: null, videoUrl: null, isVideo: false, postId: null, shortcode: null, mediaId: null };
+            let result = { url: null, width: null, videoUrl: null, isVideo: false, postId: null, shortcode: null };
             try {
                 let currentEl = element;
                 let depth = 0;
@@ -616,22 +624,20 @@
                                 ].filter(Boolean);
 
                                 for (const source of sources) {
+                                    // Aggressively capture parent identifiers
                                     const pk = source.pk || source.id;
                                     if (pk && !result.postId) result.postId = String(pk).split('_')[0];
-                                    if (!result.shortcode) result.shortcode = source.shortcode || source.code;
-
-                                    // Extract slide-specific ID (vital for targeting carousel images during an API upgrade)
-                                    if (!result.mediaId && (source.id || source.pk)) {
-                                        result.mediaId = String(source.id || source.pk).split('_')[0];
+                                    if (!result.shortcode && (source.shortcode || source.code)) {
+                                        result.shortcode = source.shortcode || source.code;
                                     }
 
-                                    const isVideo = Boolean(source.video_versions || source.is_video || source.media_type === 2);
-                                    if (isVideo) result.isVideo = true;
-
+                                    // Local fallback data
+                                    if (!result.isVideo) {
+                                        result.isVideo = Boolean(source.video_versions || source.is_video || source.media_type === 2);
+                                    }
                                     if (source.video_versions?.length && !result.videoUrl) {
                                         result.videoUrl = source.video_versions.sort((a, b) => (b.width || 0) - (a.width || 0))[0].url;
                                     }
-
                                     if (source.image_versions2?.candidates?.length && !result.url) {
                                         const best = source.image_versions2.candidates.sort((a, b) => b.width - a.width)[0];
                                         result.url = best.url;
@@ -942,24 +948,30 @@
                 const ctx = getContextData();
                 if (!ctx) throw new Error('Could not resolve media context');
 
-                let { postId, shortcode, isVideo, videoUrl, url: imageUrl, mediaElement, prefix, mediaId, width } = ctx;
+                let { postId, shortcode, isVideo, videoUrl, url: imageUrl, mediaElement, prefix } = ctx;
                 if (!postId && shortcode) postId = shortcodeToPostId(shortcode);
 
                 let finalUrl = null;
                 const filename = Media.generateFilename(prefix || 'feed', isVideo ? 'mp4' : 'jpg');
                 let needsApiUpgrade = false;
 
-                // 1. Evaluate if we need to bypass local DOM/Fiber for a better resolution
                 if (isVideo) {
                     if (!videoUrl || videoUrl.startsWith('blob:')) needsApiUpgrade = true;
                 } else {
-                    if (!width || width < CONFIG.API.MAX_STANDARD_WIDTH) needsApiUpgrade = true;
+                    needsApiUpgrade = true;
                 }
 
-                // 2. Fetch maximum uncompressed resolution from backend if constrained by modal view
+                // Extract absolute visual fingerprint from the DOM element itself
+                const mediaSrc = mediaElement ? (mediaElement.tagName === 'VIDEO' ? (mediaElement.poster || mediaElement.src) : mediaElement.src) : '';
+                const targetFingerprint = (function(url) {
+                    if (!url || url.startsWith('data:') || url.startsWith('blob:')) return null;
+                    try { return new URL(url, 'https://instagram.com').pathname.split('/').pop(); }
+                    catch(e) { return null; }
+                })(mediaSrc);
+
                 if (needsApiUpgrade && (postId || shortcode)) {
                     try {
-                        const upgradeUrl = await API.getRobustMediaUrl(postId, shortcode, isVideo, mediaId);
+                        const upgradeUrl = await API.getRobustMediaUrl(postId, shortcode, isVideo, targetFingerprint);
                         if (upgradeUrl) {
                             finalUrl = upgradeUrl;
                         }
@@ -968,7 +980,6 @@
                     }
                 }
 
-                // 3. Fallback to local DOM/Fiber state if backend bypass wasn't needed or failed
                 if (!finalUrl) {
                     if (isVideo) {
                         finalUrl = videoUrl && !videoUrl.startsWith('blob:') ? videoUrl : (mediaElement ? mediaElement.src : null);
@@ -981,7 +992,6 @@
                     throw new Error('Invalid or protected URL resolved');
                 }
 
-                // 4. Action Delivery
                 if (actionType === 'link') {
                     if (typeof GM_openInTab === 'function') {
                         GM_openInTab(finalUrl, { active: false, insert: true });
