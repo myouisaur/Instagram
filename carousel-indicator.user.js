@@ -2,7 +2,7 @@
 // @name         [Instagram] Carousel Indicator
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://www.instagram.com/favicon.ico
-// @version      4.0
+// @version      4.1
 // @description  Adds a native mobile-style position badge to multi-image carousels on the web.
 // @author       Xiv
 // @match        *://*.instagram.com/*
@@ -100,13 +100,14 @@
             backdrop-filter: blur(24px) saturate(180%) brightness(1.1);
             -webkit-backdrop-filter: blur(24px) saturate(180%) brightness(1.1);
 
-            /* Layered inset highlights (Outer shadows removed to eliminate dark halo) */
+            /* Layered inset highlights + ultra-subtle ambient shadow for white backgrounds */
             box-shadow:
                 inset 0  1.5px 0   rgba(255,255,255,0.75),
                 inset 0 -1.5px 0   rgba(255,255,255,0.06),
                 inset  1px 0   0   rgba(255,255,255,0.30),
                 inset -1px 0   0   rgba(255,255,255,0.10),
-                0 0 0 0.5px        rgba(255,255,255,0.20);
+                0 0 0 1px          rgba(0,0,0,0.08),
+                0 3px 8px          rgba(0,0,0,0.10);
 
             transition:
                 opacity 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
@@ -315,6 +316,10 @@
             const mediaContainer = Extractor.getMediaContainer(dotsContainer, rootElement);
             if (!mediaContainer) return;
 
+            // CRITICAL DOM CHECK: Guarantee only ONE badge can ever exist per media container.
+            // This physically prevents stacking/multiplying effects on single-post views.
+            if (mediaContainer.querySelector(`.${CONFIG.CLASSES.BADGE}`)) return;
+
             processedContainers.set(rootElement, true);
 
             const style = window.getComputedStyle(mediaContainer);
@@ -455,7 +460,7 @@
                 this.processDOM();
                 this.startObserver();
                 this.setupHooks();
-                log('v3.10 Loaded (Shadowless Liquid Glass)');
+                log('v3.12 Loaded (Stacking Fix & Subtle Outline)');
             });
         }
     };
