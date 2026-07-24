@@ -2,7 +2,7 @@
 // @name         [Instagram] Carousel Indicator
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://www.instagram.com/favicon.ico
-// @version      4.1
+// @version      4.2
 // @description  Adds a native mobile-style position badge to multi-image carousels on the web.
 // @author       Xiv
 // @match        *://*.instagram.com/*
@@ -97,8 +97,8 @@
 
             /* Frosted glass base */
             background: rgba(255, 255, 255, 0.14);
-            backdrop-filter: blur(24px) saturate(180%) brightness(1.1);
-            -webkit-backdrop-filter: blur(24px) saturate(180%) brightness(1.1);
+            backdrop-filter: blur(0.5em) saturate(180%) brightness(1.1);
+            -webkit-backdrop-filter: blur(0.5em) saturate(180%) brightness(1.1);
 
             /* Layered inset highlights + ultra-subtle ambient shadow for white backgrounds */
             box-shadow:
