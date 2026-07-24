@@ -2,7 +2,7 @@
 // @name         [Instagram] Carousel Indicator
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://www.instagram.com/favicon.ico
-// @version      4.2
+// @version      4.3
 // @description  Adds a native mobile-style position badge to multi-image carousels on the web.
 // @author       Xiv
 // @match        *://*.instagram.com/*
@@ -23,7 +23,6 @@
     // ==========================================
 
     const CONFIG = {
-        // Feature Flags
         DEBUG: false,
 
         // Selectors (Scoped strictly to stable views: single posts and modals)
@@ -33,7 +32,7 @@
 
         // Layout Constraints
         LAYOUT: {
-            MIN_MEDIA_SIZE: 250 // Minimum width/height to be considered the main media frame
+            MIN_MEDIA_SIZE: 250
         },
 
         // Timing
@@ -49,7 +48,6 @@
             BADGE: 'xiv-carousel-badge',
             TEXT: 'xiv-carousel-text',
             VISIBLE: 'xiv-carousel-visible',
-            // Liquid Glass Layers
             LENS: 'xiv-badge-lens',
             SCATTER: 'xiv-badge-scatter',
             CHROMA: 'xiv-badge-chroma',
@@ -69,7 +67,6 @@
     // ==========================================
 
     const CSS = `
-        /* Base Shell (Liquid Glass Base) */
         .${CONFIG.CLASSES.BADGE} {
             position: absolute;
             top: clamp(0.75rem, 3%, 1.25rem);
@@ -80,8 +77,6 @@
             z-index: 50;
             pointer-events: none;
             overflow: hidden;
-
-            /* Sizing & Flex (Strictly matching v3.7 native pill size) */
             display: flex;
             align-items: center;
             justify-content: center;
@@ -89,18 +84,12 @@
             min-width: 2.5rem;
             user-select: none;
             -webkit-user-select: none;
-
-            /* Hardware Acceleration & Opacity */
             opacity: 0;
             will-change: transform, opacity;
             transform: translateZ(0) scale(0.9) translateY(4px);
-
-            /* Frosted glass base */
             background: rgba(255, 255, 255, 0.14);
             backdrop-filter: blur(0.5em) saturate(180%) brightness(1.1);
             -webkit-backdrop-filter: blur(0.5em) saturate(180%) brightness(1.1);
-
-            /* Layered inset highlights + ultra-subtle ambient shadow for white backgrounds */
             box-shadow:
                 inset 0  1.5px 0   rgba(255,255,255,0.75),
                 inset 0 -1.5px 0   rgba(255,255,255,0.06),
@@ -108,7 +97,6 @@
                 inset -1px 0   0   rgba(255,255,255,0.10),
                 0 0 0 1px          rgba(0,0,0,0.08),
                 0 3px 8px          rgba(0,0,0,0.10);
-
             transition:
                 opacity 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
                 transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -119,35 +107,20 @@
             transform: translateZ(0) scale(1) translateY(0);
         }
 
-        /* Gradient Border Ring (mask-composite trick) */
         .${CONFIG.CLASSES.BADGE}::before {
-            content: '';
-            position: absolute;
-            inset: 0;
-            border-radius: 9999px;
-            padding: 1px;
+            content: ''; position: absolute; inset: 0; border-radius: 9999px; padding: 1px;
             background: linear-gradient(155deg, rgba(255,255,255,0.72) 0%, rgba(255,255,255,0.35) 25%, rgba(255,255,255,0.08) 55%, rgba(255,255,255,0.22) 100%);
             -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
             mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-            -webkit-mask-composite: xor;
-            mask-composite: exclude;
-            pointer-events: none;
-            z-index: 5;
+            -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none; z-index: 5;
         }
 
-        /* Top Glare / Specular Highlight */
         .${CONFIG.CLASSES.BADGE}::after {
-            content: '';
-            position: absolute;
-            top: 0; left: 0; right: 0;
-            height: 58%;
+            content: ''; position: absolute; top: 0; left: 0; right: 0; height: 58%;
             background: radial-gradient(ellipse 75% 70% at 50% -8%, rgba(255,255,255,0.58) 0%, rgba(255,255,255,0.20) 40%, rgba(255,255,255,0.05) 70%, transparent 90%);
-            border-radius: 9999px 9999px 0 0;
-            pointer-events: none;
-            z-index: 5;
+            border-radius: 9999px 9999px 0 0; pointer-events: none; z-index: 5;
         }
 
-        /* ── Inner Glass Layers ── */
         .${CONFIG.CLASSES.LENS} {
             position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 9999px;
             background: radial-gradient(ellipse at 72% 56%, rgba(255,255,255,0.22) 0%, rgba(255,255,255,0.06) 45%, rgba(180,200,255,0.04) 80%, rgba(0,0,0,0) 100%);
@@ -169,16 +142,10 @@
             pointer-events: none; z-index: 4;
         }
 
-        /* ── Typography ── */
         .${CONFIG.CLASSES.TEXT} {
-            position: relative;
-            z-index: 6; /* Ensures text sits above all glass layers and pseudo-elements */
-            color: rgba(255, 255, 255, 0.96);
+            position: relative; z-index: 6; color: rgba(255, 255, 255, 0.96);
             font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            font-size: clamp(0.75rem, 1.5vw, 0.875rem);
-            font-weight: 600;
-            letter-spacing: 0.3px;
-            line-height: 1;
+            font-size: clamp(0.75rem, 1.5vw, 0.875rem); font-weight: 600; letter-spacing: 0.3px; line-height: 1;
             filter: drop-shadow(0 0 4px rgba(0,0,0,0.65)) drop-shadow(0 1px 3px rgba(0,0,0,0.50));
         }
     `;
@@ -216,9 +183,7 @@
                     }
                     if (isDots) {
                         const rect = div.getBoundingClientRect();
-                        if (rect.height > 0 && rect.height < 40 && rect.width > 10) {
-                            return div;
-                        }
+                        if (rect.height > 0 && rect.height < 40 && rect.width > 10) return div;
                     }
                 }
             }
@@ -229,9 +194,7 @@
             let current = dotsContainer.parentElement;
             while (current && current !== root) {
                 const rect = current.getBoundingClientRect();
-                if (rect.width > CONFIG.LAYOUT.MIN_MEDIA_SIZE && rect.height > CONFIG.LAYOUT.MIN_MEDIA_SIZE) {
-                    return current;
-                }
+                if (rect.width > CONFIG.LAYOUT.MIN_MEDIA_SIZE && rect.height > CONFIG.LAYOUT.MIN_MEDIA_SIZE) return current;
                 current = current.parentElement;
             }
             return root;
@@ -241,7 +204,6 @@
             let current = -1;
             let total = dotsContainer.children.length;
 
-            // 1. Attempt React Fiber Extraction
             try {
                 let node = dotsContainer;
                 let depth = 0;
@@ -260,9 +222,7 @@
                                 else if (typeof props.total === 'number') total = props.total;
                                 else if (props.carousel_media) total = props.carousel_media.length;
 
-                                if (current !== -1 && total > 0) {
-                                    return { current: current + 1, total };
-                                }
+                                if (current !== -1 && total > 0) return { current: current + 1, total };
                             }
                             fiber = fiber.return;
                             fDepth++;
@@ -275,9 +235,7 @@
                 if (CONFIG.DEBUG) console.warn('Fiber dots extraction failed:', e);
             }
 
-            // 2. Fallback: Visual / DOM Extraction
             const dots = Array.from(dotsContainer.children);
-
             if (total === 2) {
                 const opacity0 = parseFloat(window.getComputedStyle(dots[0]).opacity) || 1;
                 const opacity1 = parseFloat(window.getComputedStyle(dots[1]).opacity) || 1;
@@ -289,12 +247,8 @@
                     if (!classMap.has(c)) classMap.set(c, []);
                     classMap.get(c).push(idx);
                 });
-
                 for (const [className, indices] of classMap.entries()) {
-                    if (indices.length === 1) {
-                        current = indices[0];
-                        break;
-                    }
+                    if (indices.length === 1) { current = indices[0]; break; }
                 }
             }
 
@@ -314,79 +268,81 @@
             if (!dotsContainer) return;
 
             const mediaContainer = Extractor.getMediaContainer(dotsContainer, rootElement);
-            if (!mediaContainer) return;
-
-            // CRITICAL DOM CHECK: Guarantee only ONE badge can ever exist per media container.
-            // This physically prevents stacking/multiplying effects on single-post views.
-            if (mediaContainer.querySelector(`.${CONFIG.CLASSES.BADGE}`)) return;
+            if (!mediaContainer || mediaContainer.querySelector(`.${CONFIG.CLASSES.BADGE}`)) return;
 
             processedContainers.set(rootElement, true);
 
             const style = window.getComputedStyle(mediaContainer);
-            if (style.position === 'static') {
-                mediaContainer.style.position = 'relative';
-            }
+            if (style.position === 'static') mediaContainer.style.position = 'relative';
 
-            const badge = document.createElement('div');
-            badge.className = CONFIG.CLASSES.BADGE;
-
-            // Build Liquid Glass Depth Layers
+            const badge = document.createElement('div'); badge.className = CONFIG.CLASSES.BADGE;
             const lens = document.createElement('div'); lens.className = CONFIG.CLASSES.LENS;
             const scatter = document.createElement('div'); scatter.className = CONFIG.CLASSES.SCATTER;
             const chroma = document.createElement('div'); chroma.className = CONFIG.CLASSES.CHROMA;
             const rim = document.createElement('div'); rim.className = CONFIG.CLASSES.RIM;
-
-            const textLayer = document.createElement('span');
-            textLayer.className = CONFIG.CLASSES.TEXT;
+            const textLayer = document.createElement('span'); textLayer.className = CONFIG.CLASSES.TEXT;
 
             badge.append(lens, scatter, chroma, rim, textLayer);
 
-            try {
-                mediaContainer.appendChild(badge);
-            } catch(err) {
-                log('Failed to append badge to media container safely', err);
-                return;
-            }
+            try { mediaContainer.appendChild(badge); }
+            catch(err) { log('Failed to append badge', err); return; }
 
-            // Unified State Synchronizer
+            // Unified State Synchronizer (Prioritizes URL Index instantly)
             const syncBadgeState = () => {
                 const domState = Extractor.getDotState(dotsContainer);
-                textLayer.textContent = `${domState.current}/${domState.total}`;
+                const urlParams = new URLSearchParams(window.location.search);
+                const urlIndex = urlParams.get('img_index');
+
+                let activeCurrent = domState.current;
+
+                // Validate the URL parameter applies to this specific post context
+                if (urlIndex) {
+                    const isModal = rootElement.getAttribute('role') === 'dialog';
+                    const hasMatchingLink = Array.from(rootElement.querySelectorAll('a')).some(a => a.pathname === window.location.pathname);
+
+                    if (isModal || hasMatchingLink) {
+                        const parsed = parseInt(urlIndex, 10);
+                        if (!isNaN(parsed) && parsed > 0 && parsed <= domState.total) {
+                            activeCurrent = parsed;
+                        }
+                    }
+                }
+
+                textLayer.textContent = `${activeCurrent}/${domState.total}`;
             };
+
+            // Attach sync function directly to DOM node so the URL listener can trigger it globally
+            mediaContainer.xivSyncBadge = syncBadgeState;
 
             // Initial Paint
             window.requestAnimationFrame(syncBadgeState);
+            CONFIG.TIMING.HYDRATION_CHECKS.forEach(delay => setTimeout(() => window.requestAnimationFrame(syncBadgeState), delay));
 
-            CONFIG.TIMING.HYDRATION_CHECKS.forEach(delay => {
-                setTimeout(() => window.requestAnimationFrame(syncBadgeState), delay);
-            });
-
-            // Reveal badge smoothly
             window.requestAnimationFrame(() => {
-                void badge.offsetWidth; // Force reflow
+                void badge.offsetWidth;
                 badge.classList.add(CONFIG.CLASSES.VISIBLE);
             });
 
             let transitionTimer = null;
 
-            // DOM Observer to track swipe/click pagination
+            // DOM Observer fallback
             const dotObserver = new MutationObserver(() => {
                 if (transitionTimer) clearTimeout(transitionTimer);
 
-                // Defeat CSS transition lag by delaying the read until opacity crossfade completes
-                transitionTimer = setTimeout(() => {
+                const hasUrlIndex = new URLSearchParams(window.location.search).has('img_index');
+
+                // If URL-driven navigation is active, bypass the 150ms delay for zero-latency updates
+                if (hasUrlIndex) {
                     window.requestAnimationFrame(syncBadgeState);
-                }, CONFIG.TIMING.TRANSITION_DELAY_MS);
+                } else {
+                    transitionTimer = setTimeout(() => {
+                        window.requestAnimationFrame(syncBadgeState);
+                    }, CONFIG.TIMING.TRANSITION_DELAY_MS);
+                }
             });
 
-            dotObserver.observe(dotsContainer, {
-                attributes: true,
-                childList: true,
-                subtree: true,
-                attributeFilter: ['class', 'style']
-            });
-
-            log('Initialized carousel instance (Liquid Glass)');
+            dotObserver.observe(dotsContainer, { attributes: true, childList: true, subtree: true, attributeFilter: ['class', 'style'] });
+            log('Initialized carousel instance v4.3');
         }
     };
 
@@ -397,16 +353,12 @@
     const App = {
         injectStyles() {
             if (document.getElementById('xiv-carousel-styles')) return;
-
             const style = document.createElement('style');
             style.id = 'xiv-carousel-styles';
             style.textContent = CSS;
 
-            if (typeof GM_addStyle === 'function') {
-                GM_addStyle(CSS);
-            } else {
-                document.head.appendChild(style);
-            }
+            if (typeof GM_addStyle === 'function') GM_addStyle(CSS);
+            else document.head.appendChild(style);
         },
 
         processDOM() {
@@ -423,26 +375,47 @@
 
         startObserver() {
             if (State.mainObserver) State.mainObserver.disconnect();
-
             State.mainObserver = new MutationObserver((mutations) => {
                 const shouldUpdate = mutations.some(m => m.addedNodes.length > 0 || m.type === 'attributes');
                 if (shouldUpdate) this.requestUpdate();
             });
-            // Restored attributes observation to catch SPA class swaps on single posts
             State.mainObserver.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
         },
 
         setupHooks() {
-            // SPA Navigation
-            window.addEventListener('popstate', () => this.requestUpdate());
+            // Instant broadcast for URL parameter changes
+            const notifyUrlChange = () => window.dispatchEvent(new CustomEvent('xiv:urlChange'));
+
+            window.addEventListener('popstate', () => {
+                notifyUrlChange();
+                this.requestUpdate();
+            });
+
             const pushState = history.pushState;
             history.pushState = function() {
                 const res = pushState.apply(this, arguments);
+                notifyUrlChange();
                 App.requestUpdate();
                 return res;
             };
 
-            // Page Visibility API - Resource Management
+            const replaceState = history.replaceState;
+            history.replaceState = function() {
+                const res = replaceState.apply(this, arguments);
+                notifyUrlChange();
+                return res;
+            };
+
+            // Global listener to trigger zero-latency sync across all active carousels
+            window.addEventListener('xiv:urlChange', () => {
+                document.querySelectorAll(`.${CONFIG.CLASSES.BADGE}`).forEach(badge => {
+                    const container = badge.parentElement;
+                    if (container && typeof container.xivSyncBadge === 'function') {
+                        window.requestAnimationFrame(container.xivSyncBadge);
+                    }
+                });
+            });
+
             document.addEventListener('visibilitychange', () => {
                 if (document.visibilityState === 'hidden') {
                     if (State.mainObserver) State.mainObserver.disconnect();
@@ -460,7 +433,7 @@
                 this.processDOM();
                 this.startObserver();
                 this.setupHooks();
-                log('v3.12 Loaded (Stacking Fix & Subtle Outline)');
+                log('v4.3 Loaded (URL-Driven Zero Latency)');
             });
         }
     };
