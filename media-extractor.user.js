@@ -2,12 +2,12 @@
 // @name         [Instagram] Media Extractor
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://www.instagram.com/favicon.ico
-// @version      7.5
+// @version      8.1
 // @description  Extracts and downloads the highest-resolution images, videos, and audio-stories directly from the Instagram feed, reels, and stories.
 // @author       Xiv
 // @match        *://*.instagram.com/*
-// @noframes
 // @run-at       document-start
+// @noframes
 // @grant        GM_xmlhttpRequest
 // @grant        GM_openInTab
 // @grant        GM_addStyle
@@ -62,8 +62,8 @@
             FEED_BTN: 'xiv-feed-btn',
             STORY_BTN: 'xiv-story-btn',
             REEL_BTN: 'xiv-reel-btn',
-            BTN: 'xiv-action-btn',
-            ICON_WRAPPER: 'xiv-btn-icon',
+            BTN: 'xiv-glass-shell',
+            ICON_WRAPPER: 'xiv-glass-content',
             ICON_INNER: 'xiv-icon-inner',
             MORPHING: 'xiv-morphing',
             SPINNER: 'xiv-spinner',
@@ -71,7 +71,6 @@
             GLASS_SCATTER: 'xiv-glass-scatter',
             GLASS_CHROMA: 'xiv-glass-chroma',
             GLASS_RIM: 'xiv-glass-rim',
-            RIPPLE: 'xiv-glass-ripple',
             PROGRESS: 'xiv-progress-text',
             TOAST_CONTAINER: 'xiv-toast-container',
             TOAST: 'xiv-toast',
@@ -113,16 +112,10 @@
                 transition: visibility 0s linear 0.3s;
             }
 
-            body .${CLASSES.CONTAINER}::before {
-                content: '';
-                position: absolute;
-                top: -20px; right: -25px; bottom: -20px; left: -25px;
-                z-index: -1;
-                background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.22) 0%, rgba(0, 0, 0, 0) 65%);
-                pointer-events: none;
-                border-radius: 50%;
-                opacity: 0;
-                transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            body .${CLASSES.CONTAINER}.${CLASSES.VISIBLE} {
+                visibility: visible;
+                pointer-events: auto;
+                transition: visibility 0s;
             }
 
             body .${CLASSES.FEED_BTN} {
@@ -146,168 +139,172 @@
                 gap: 12px;
                 align-items: center;
             }
-            body .${CLASSES.REEL_BTN}::before { display: none; }
 
-            body .${CLASSES.CONTAINER}.${CLASSES.VISIBLE} {
-                visibility: visible;
-                pointer-events: auto;
-                transition: visibility 0s;
-            }
-
-            body .${CLASSES.CONTAINER}.${CLASSES.VISIBLE}::before { opacity: 1; }
-
-            /* ── Button shell ────────────────────────────── */
+            /* ── Shell (Base Glass Surface) ─────────────────────────────────────── */
             body .${CLASSES.BTN} {
                 position: relative;
-                width: 35px; height: 35px;
-                border-radius: 50%;
-                border: none; outline: none; overflow: hidden;
+                font-size: 16px; /* Establishes proportional base size */
+                width: 2.25em; height: 2.25em;
+                border-radius: 9999px;
+                overflow: hidden;
+                border: none;
+                outline: none;
                 cursor: pointer;
                 display: flex; align-items: center; justify-content: center;
                 flex-shrink: 0;
-                color: rgba(255, 255, 255, 0.96);
+
+                /* Frosted glass base */
                 background: rgba(255, 255, 255, 0.14);
-                backdrop-filter: blur(24px) saturate(180%) brightness(1.1);
-                -webkit-backdrop-filter: blur(24px) saturate(180%) brightness(1.1);
+                backdrop-filter: blur(0.5em) saturate(180%) brightness(1.1);
+                -webkit-backdrop-filter: blur(0.5em) saturate(180%) brightness(1.1);
+
+                /* Layered inset highlights + ambient drop shadow */
                 box-shadow:
-                    inset 0  1.5px 0   rgba(255,255,255,0.75),
-                    inset 0 -1.5px 0   rgba(255,255,255,0.06),
-                    inset  1px 0   0   rgba(255,255,255,0.30),
-                    inset -1px 0   0   rgba(255,255,255,0.10),
-                    0 0 0 0.5px        rgba(255,255,255,0.20),
-                    0 6px 20px         rgba(0,0,0,0.32),
-                    0 2px  6px         rgba(0,0,0,0.20);
+                    inset 0     0.09em 0    rgba(255,255,255,0.75),
+                    inset 0    -0.09em 0    rgba(255,255,255,0.06),
+                    inset  0.06em 0    0    rgba(255,255,255,0.30),
+                    inset -0.06em 0    0    rgba(255,255,255,0.10),
+                    0 0 0       0.03em      rgba(255,255,255,0.20),
+                    0 0.4em     1.25em      rgba(0,0,0,0.32),
+                    0 0.15em    0.4em       rgba(0,0,0,0.20);
+
                 opacity: 0;
                 will-change: transform, opacity;
-                transform: translateZ(0);
+                transform: translateZ(0) scale(0.9) translateY(4px);
+
                 transition:
-                    transform       0.35s cubic-bezier(0.34, 1.56, 0.64, 1),
-                    box-shadow      0.35s ease,
-                    background      0.35s ease,
-                    opacity         0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                    transform  0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
+                    opacity    0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
+                    box-shadow 0.35s ease,
+                    background 0.35s ease;
             }
 
             body .${CLASSES.CONTAINER}.${CLASSES.VISIBLE} .${CLASSES.BTN},
             body .${CLASSES.REEL_BTN} .${CLASSES.BTN} {
                 opacity: 1;
-            }
-
-            body .${CLASSES.BTN}[data-loading="1"] { cursor: default !important; }
-
-            body .${CLASSES.BTN}::before {
-                content: '';
-                position: absolute; inset: 0; border-radius: 50%; padding: 1px;
-                background: linear-gradient(155deg, rgba(255,255,255,0.72) 0%, rgba(255,255,255,0.35) 25%, rgba(255,255,255,0.08) 55%, rgba(255,255,255,0.22) 100%);
-                -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-                mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-                -webkit-mask-composite: xor; mask-composite: exclude;
-                pointer-events: none; z-index: 5;
-                transition: background 0.35s ease;
-            }
-
-            body .${CLASSES.BTN}::after {
-                content: '';
-                position: absolute; top: 0; left: 0; right: 0; height: 58%;
-                background: radial-gradient(ellipse 75% 70% at 50% -8%, rgba(255,255,255,0.58) 0%, rgba(255,255,255,0.20) 40%, rgba(255,255,255,0.05) 70%, transparent 90%);
-                border-radius: 50% 50% 0 0;
-                pointer-events: none; z-index: 5;
-                transition: background 0.35s ease;
+                transform: translateZ(0) scale(1) translateY(0);
             }
 
             body .${CLASSES.BTN}:hover {
+                transform: translateZ(0) scale(1.05) translateY(0);
                 background: rgba(255, 255, 255, 0.22);
-                backdrop-filter: blur(32px) saturate(210%) brightness(1.18);
-                -webkit-backdrop-filter: blur(32px) saturate(210%) brightness(1.18);
-                box-shadow:
-                    inset 0  1.5px 0   rgba(255,255,255,0.85),
-                    inset 0 -1.5px 0   rgba(255,255,255,0.08),
-                    inset  1px 0   0   rgba(255,255,255,0.40),
-                    inset -1px 0   0   rgba(255,255,255,0.14),
-                    0 0 0 0.5px        rgba(255,255,255,0.28),
-                    0 10px 30px        rgba(0,0,0,0.38),
-                    0 3px 10px         rgba(0,0,0,0.22),
-                    0 0 22px           rgba(140,180,255,0.22);
             }
 
             body .${CLASSES.BTN}:active {
-                transition: box-shadow 0.10s ease;
-                box-shadow:
-                    inset 0  1.5px 0  rgba(255,255,255,0.75),
-                    inset 0 -1.5px 0  rgba(255,255,255,0.06),
-                    inset  1px 0   0  rgba(255,255,255,0.30),
-                    inset -1px 0   0  rgba(255,255,255,0.10),
-                    0 0 0 0.5px       rgba(255,255,255,0.18),
-                    0 3px 10px        rgba(0,0,0,0.25);
+                transform: translateZ(0) scale(0.95) translateY(0);
+                background: rgba(255, 255, 255, 0.18);
             }
 
-            /* Icon wrapper */
+            body .${CLASSES.BTN}[data-loading="1"] {
+                cursor: default !important;
+                transform: translateZ(0) scale(1) translateY(0) !important;
+            }
+
+            /* ── Gradient Border Ring (mask-composite trick) ─────────────────────── */
+            body .${CLASSES.BTN}::before {
+                content: '';
+                position: absolute;
+                inset: 0;
+                border-radius: inherit;
+                padding: 0.06em;
+                background: linear-gradient(155deg,
+                    rgba(255,255,255,0.72) 0%,
+                    rgba(255,255,255,0.35) 25%,
+                    rgba(255,255,255,0.08) 55%,
+                    rgba(255,255,255,0.22) 100%);
+                -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+                mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+                -webkit-mask-composite: xor;
+                mask-composite: exclude;
+                pointer-events: none;
+                z-index: 5;
+            }
+
+            /* ── Top Glare / Specular Highlight ─────────────────────────────────── */
+            body .${CLASSES.BTN}::after {
+                content: '';
+                position: absolute;
+                top: 0; left: 0; right: 0;
+                height: 58%;
+                background: radial-gradient(ellipse 75% 70% at 50% -8%,
+                    rgba(255,255,255,0.58) 0%,
+                    rgba(255,255,255,0.20) 40%,
+                    rgba(255,255,255,0.05) 70%,
+                    transparent 90%);
+                border-radius: inherit;
+                pointer-events: none;
+                z-index: 5;
+            }
+
+            /* ── Inner Glass Depth Layers ───────────────────────────────────────── */
+            body .${CLASSES.GLASS_LENS} {
+                position: absolute; inset: 0; border-radius: inherit;
+                background: radial-gradient(ellipse at 72% 56%,
+                    rgba(255,255,255,0.22) 0%,
+                    rgba(255,255,255,0.06) 45%,
+                    rgba(180,200,255,0.04) 80%,
+                    rgba(0,0,0,0) 100%);
+                pointer-events: none; z-index: 1;
+            }
+
+            body .${CLASSES.GLASS_SCATTER} {
+                position: absolute; inset: 0.12em; border-radius: inherit;
+                background: radial-gradient(ellipse 60% 50% at 38% 40%,
+                    rgba(255,255,255,0.09) 0%, transparent 65%);
+                pointer-events: none; z-index: 2;
+            }
+
+            body .${CLASSES.GLASS_CHROMA} {
+                position: absolute; inset: 0; border-radius: inherit;
+                background: radial-gradient(ellipse 100% 100% at 50% 50%,
+                    transparent 62%,
+                    rgba(80,200,255,0.09) 74%,
+                    rgba(255,80,100,0.07) 84%,
+                    transparent 92%);
+                pointer-events: none; z-index: 3;
+            }
+
+            body .${CLASSES.GLASS_RIM} {
+                position: absolute; bottom: 0; left: 10%; right: 10%; height: 40%;
+                border-radius: 0 0 inherit inherit;
+                background: radial-gradient(ellipse 80% 100% at 50% 115%,
+                    rgba(255,255,255,0.26) 0%,
+                    rgba(255,255,255,0.08) 45%,
+                    transparent 70%);
+                pointer-events: none; z-index: 4;
+            }
+
+            /* ── Content Layer ───────────────────────────────────────────────────── */
             body .${CLASSES.ICON_WRAPPER} {
                 position: relative;
-                z-index: 6; display: flex; align-items: center; justify-content: center;
-                width: 17px; height: 17px; color: rgba(255, 255, 255, 0.96);
-                filter: drop-shadow(0 0 4px rgba(0,0,0,0.65)) drop-shadow(0 1px 3px rgba(0,0,0,0.50));
-                transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1), filter 0.35s ease;
+                z-index: 6;
+                width: 1.125em; height: 1.125em;
+                display: flex; align-items: center; justify-content: center;
+                color: rgba(255, 255, 255, 0.96);
+                filter:
+                    drop-shadow(0 0    0.25em rgba(0,0,0,0.65))
+                    drop-shadow(0 0.06em 0.19em rgba(0,0,0,0.50));
                 pointer-events: none;
-            }
-
-            body .${CLASSES.BTN}:hover .${CLASSES.ICON_WRAPPER} {
-                filter: drop-shadow(0 0 7px rgba(180,210,255,0.70)) drop-shadow(0 2px 4px rgba(0,0,0,0.55));
             }
 
             /* Morph Transitions & Spinner */
             body .${CLASSES.ICON_INNER} {
                 display: flex;
                 align-items: center; justify-content: center; width: 100%; height: 100%;
-                transition: opacity 0.15s ease, transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+                transition: opacity 0.15s ease, transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
                 transform-origin: center;
             }
 
-            body .${CLASSES.ICON_INNER}.${CLASSES.MORPHING} { opacity: 0; transform: scale(0.25) rotate(-45deg); }
+            body .${CLASSES.ICON_INNER}.${CLASSES.MORPHING} { opacity: 0; transform: scale(0.5) rotate(-15deg); }
             body .${CLASSES.ICON_INNER} svg { width: 100% !important; height: 100% !important; display: block !important; }
 
             @keyframes xiv-spin { 100% { transform: rotate(360deg); } }
             body .${CLASSES.SPINNER} { animation: xiv-spin 1s linear infinite; transform-origin: center; }
 
-            /* Inner glass layers */
-            body .${CLASSES.GLASS_LENS} {
-                position: absolute;
-                inset: 0; width: 100%; height: 100%; border-radius: 50%;
-                background: radial-gradient(circle at 72% 56%, rgba(255,255,255,0.22) 0%, rgba(255,255,255,0.06) 45%, rgba(180,200,255,0.04) 80%, rgba(0,0,0,0) 100%);
-                pointer-events: none; z-index: 1;
-            }
-            body .${CLASSES.GLASS_SCATTER} {
-                position: absolute;
-                inset: 2px; border-radius: 50%;
-                background: radial-gradient(ellipse 60% 50% at 38% 40%, rgba(255,255,255,0.09) 0%, transparent 65%);
-                pointer-events: none; z-index: 2;
-            }
-            body .${CLASSES.GLASS_CHROMA} {
-                position: absolute;
-                inset: 0; border-radius: 50%;
-                background: radial-gradient(ellipse 100% 100% at 50% 50%, transparent 62%, rgba(80,200,255,0.09) 74%, rgba(255,80,100,0.07) 84%, transparent 92%);
-                pointer-events: none; z-index: 3;
-            }
-            body .${CLASSES.GLASS_RIM} {
-                position: absolute;
-                bottom: 0; left: 10%; right: 10%; height: 40%;
-                background: radial-gradient(ellipse 80% 100% at 50% 115%, rgba(255,255,255,0.26) 0%, rgba(255,255,255,0.08) 45%, transparent 70%);
-                border-radius: 0 0 50% 50%; pointer-events: none; z-index: 4;
-            }
-
-            /* Ripple */
-            body .${CLASSES.RIPPLE} {
-                position: absolute;
-                border-radius: 50%; background: rgba(255, 255, 255, 0.28);
-                transform: scale(0); animation: xiv-ripple 0.55s cubic-bezier(0.22, 1, 0.36, 1) forwards;
-                pointer-events: none;
-                z-index: 7;
-            }
-            @keyframes xiv-ripple { to { transform: scale(2.8); opacity: 0; } }
-
             /* Progress & Toasts */
             .${CLASSES.PROGRESS} {
-                font-size: 11px;
-                font-weight: 700; font-family: system-ui, -apple-system, sans-serif; letter-spacing: -0.5px;
+                font-size: 0.6875em;
+                font-weight: 700; font-family: system-ui, -apple-system, sans-serif; letter-spacing: -0.05em;
             }
             #${CLASSES.TOAST_CONTAINER} {
                 position: fixed;
@@ -315,7 +312,7 @@
                 z-index: 2147483647 !important; display: flex; flex-direction: column; gap: 8px; pointer-events: none;
             }
             .${CLASSES.TOAST} {
-                background: rgba(0, 0, 0, 0.7);
+                background: rgba(0, 0, 0, 0.75);
                 backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
                 color: #ffffff; padding: 12px 24px; border-radius: 30px; font-size: 14px; font-family: system-ui, -apple-system, sans-serif;
                 border: 1px solid rgba(255, 255, 255, 0.15); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2); opacity: 0; transform: translateY(20px);
@@ -452,16 +449,16 @@
             }
         },
 
-        getRobustMediaUrl(postId, shortcode, isVideo, targetFingerprint = null) {
+        getRobustMediaUrl(postId, shortcode, isVideo, targetFingerprint = null, targetIndex = null) {
             if (!postId && !shortcode) return Promise.reject(new Error('No post identifier provided'));
-            const key = `${postId || shortcode}_${isVideo}_${targetFingerprint || 'main'}`;
+            const key = `${postId || shortcode}_${isVideo}_${targetFingerprint || targetIndex || 'main'}`;
 
             if (this._inFlight.has(key)) return this._inFlight.get(key);
 
             const promise = new Promise(async (resolve, reject) => {
                 if (postId) {
                     try {
-                        const url = await this._fetchWithRetry(() => this._fetchMediaInfo(postId, isVideo, targetFingerprint));
+                        const url = await this._fetchWithRetry(() => this._fetchMediaInfo(postId, isVideo, targetFingerprint, targetIndex));
                         if (url) return resolve(url);
                     } catch (e) {
                         warn('Tier 1 API failed after retries:', e.message);
@@ -469,7 +466,7 @@
                 }
                 if (shortcode) {
                     try {
-                        const url = await this._fetchWithRetry(() => this._fetchJsonTrick(shortcode, isVideo, targetFingerprint));
+                        const url = await this._fetchWithRetry(() => this._fetchJsonTrick(shortcode, isVideo, targetFingerprint, targetIndex));
                         if (url) return resolve(url);
                     } catch (e) {
                         warn('Tier 2 Endpoint Trick failed after retries:', e.message);
@@ -498,7 +495,7 @@
             return headers;
         },
 
-        _fetchMediaInfo(postId, isVideo, targetFingerprint) {
+        _fetchMediaInfo(postId, isVideo, targetFingerprint, targetIndex) {
             return new Promise((resolve, reject) => {
                 const url = CONFIG.API.MEDIA_INFO_URL.replace('%id%', postId);
                 GM_xmlhttpRequest({
@@ -513,7 +510,7 @@
                             const data = JSON.parse(res.responseText);
                             const item = data?.items?.[0];
                             if (!item) return reject(new Error('EMPTY_RESPONSE'));
-                            const robustUrl = this._extractMediaUrl(item, isVideo, targetFingerprint);
+                            const robustUrl = this._extractMediaUrl(item, isVideo, targetFingerprint, targetIndex);
                             if (!robustUrl) return reject(new Error('NO_MEDIA_URL_FOUND'));
                             resolve(robustUrl);
                         } catch (e) {
@@ -526,7 +523,7 @@
             });
         },
 
-        _fetchJsonTrick(shortcode, isVideo, targetFingerprint) {
+        _fetchJsonTrick(shortcode, isVideo, targetFingerprint, targetIndex) {
             return new Promise((resolve, reject) => {
                 GM_xmlhttpRequest({
                     method: 'GET',
@@ -539,7 +536,7 @@
                             const data = JSON.parse(res.responseText);
                             const item = data?.items?.[0] || data?.graphql?.shortcode_media;
                             if (!item) return reject(new Error('EMPTY_JSON_RESPONSE'));
-                            const robustUrl = this._extractMediaUrl(item, isVideo, targetFingerprint);
+                            const robustUrl = this._extractMediaUrl(item, isVideo, targetFingerprint, targetIndex);
                             if (!robustUrl) return reject(new Error('NO_MEDIA_URL_FOUND'));
                             resolve(robustUrl);
                         } catch (e) {
@@ -552,14 +549,15 @@
             });
         },
 
-        _extractMediaUrl(item, isVideo, targetFingerprint) {
+        _extractMediaUrl(item, isVideo, targetFingerprint, targetIndex) {
             let targetMedia = item;
 
             if (item.carousel_media || item.edge_sidecar_to_children?.edges) {
                 const slides = item.carousel_media || item.edge_sidecar_to_children.edges;
+                let matchedSlide = null;
 
                 if (targetFingerprint) {
-                    const matchedSlide = slides.find(slide => {
+                    matchedSlide = slides.find(slide => {
                         const n = slide.node || slide;
                         const urls = [];
                         if (n.image_versions2?.candidates) urls.push(...n.image_versions2.candidates.map(c => c.url));
@@ -573,10 +571,14 @@
                             } catch(e) { return false; }
                         });
                     });
-                    targetMedia = matchedSlide ? (matchedSlide.node || matchedSlide) : (slides[0].node || slides[0]);
-                } else {
-                    targetMedia = slides[0].node || slides[0];
                 }
+
+                // Fallback to exactly calculated integer index
+                if (!matchedSlide && typeof targetIndex === 'number' && targetIndex >= 0 && targetIndex < slides.length) {
+                    matchedSlide = slides[targetIndex];
+                }
+
+                targetMedia = matchedSlide ? (matchedSlide.node || matchedSlide) : (slides[0].node || slides[0]);
             }
 
             if (isVideo) {
@@ -852,6 +854,7 @@
             btn.setAttribute('aria-label', btn.title);
             btn.setAttribute('tabindex', '0');
 
+            // Reconstruct depth layers per V4 specs
             const lens = document.createElement('div'); lens.className = CLASSES.GLASS_LENS;
             const scatter = document.createElement('div'); scatter.className = CLASSES.GLASS_SCATTER;
             const chroma = document.createElement('div'); chroma.className = CLASSES.GLASS_CHROMA;
@@ -871,17 +874,6 @@
                     e.stopPropagation();
                     if (eventType === 'click') e.preventDefault();
                 });
-            });
-
-            btn.addEventListener('pointerdown', function (e) {
-                if (btn.dataset.loading === "1") return;
-                const r = btn.getBoundingClientRect();
-                const size = Math.max(r.width, r.height);
-                const rpl = document.createElement('div');
-                rpl.className = CLASSES.RIPPLE;
-                rpl.style.cssText = `width:${size}px; height:${size}px; left:${e.clientX - r.left - size / 2}px; top:${e.clientY - r.top - size / 2}px;`;
-                btn.appendChild(rpl);
-                rpl.addEventListener('animationend', () => rpl.remove());
             });
 
             btn.addEventListener('click', () => onClickAction(btn, iconWrapper));
@@ -948,7 +940,7 @@
                 const ctx = getContextData();
                 if (!ctx) throw new Error('Could not resolve media context');
 
-                let { postId, shortcode, isVideo, videoUrl, url: imageUrl, mediaElement, prefix } = ctx;
+                let { postId, shortcode, isVideo, videoUrl, url: imageUrl, mediaElement, prefix, targetIndex } = ctx;
                 if (!postId && shortcode) postId = shortcodeToPostId(shortcode);
 
                 let finalUrl = null;
@@ -971,7 +963,7 @@
 
                 if (needsApiUpgrade && (postId || shortcode)) {
                     try {
-                        const upgradeUrl = await API.getRobustMediaUrl(postId, shortcode, isVideo, targetFingerprint);
+                        const upgradeUrl = await API.getRobustMediaUrl(postId, shortcode, isVideo, targetFingerprint, targetIndex);
                         if (upgradeUrl) {
                             finalUrl = upgradeUrl;
                         }
@@ -1112,8 +1104,29 @@
                         }
                     }
 
+                    // Structural Index Fallback System
+                    let targetIndex = null;
+
+                    // 1. Try URL parameters (Bulletproof for single-post view)
+                    if (shortcode && window.location.pathname.includes(shortcode)) {
+                        const urlParams = new URLSearchParams(window.location.search);
+                        if (urlParams.has('img_index')) {
+                            const idx = parseInt(urlParams.get('img_index'), 10);
+                            if (!isNaN(idx) && idx > 0) targetIndex = idx - 1; // API expects 0-indexed values
+                        }
+                    }
+
+                    // 2. DOM array counting (Fallback for modal/feed view)
+                    if (targetIndex === null) {
+                        const slideNode = media.closest('li');
+                        if (slideNode && slideNode.parentElement) {
+                            const idx = Array.from(slideNode.parentElement.children).indexOf(slideNode);
+                            if (idx !== -1) targetIndex = idx;
+                        }
+                    }
+
                     const isVideo = media.tagName === 'VIDEO' || fiberData.isVideo;
-                    return { ...fiberData, isVideo, shortcode, mediaElement: media, prefix: 'feed' };
+                    return { ...fiberData, isVideo, shortcode, mediaElement: media, prefix: 'feed', targetIndex };
                 };
 
                 const isVideoOnLoad = media.tagName === 'VIDEO' || Extractor.getMediaData(media).isVideo;
@@ -1156,7 +1169,7 @@
                         shortcode = match?.[1] || null;
                     }
 
-                    return { ...fiberData, shortcode, isVideo: true, mediaElement: null, prefix: 'reel' };
+                    return { ...fiberData, shortcode, isVideo: true, mediaElement: null, prefix: 'reel', targetIndex: null };
                 };
 
                 const linkBtn = UI.createButton('link', (b, i) => Engine.executeAction(b, i, 'link', getContext));
@@ -1214,7 +1227,7 @@
 
                 const isVideo = currentActive.tagName === 'VIDEO' || fiberData.isVideo;
 
-                return { ...fiberData, isVideo, postId, mediaElement: currentActive, prefix: 'story' };
+                return { ...fiberData, isVideo, postId, mediaElement: currentActive, prefix: 'story', targetIndex: null };
             };
 
             const linkBtn = UI.createButton('link', (b, i) => Engine.executeAction(b, i, 'link', getContext));
