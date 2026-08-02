@@ -2,7 +2,7 @@
 // @name         [Instagram] Media Extractor
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://www.instagram.com/favicon.ico
-// @version      8.1
+// @version      8.2
 // @description  Extracts and downloads the highest-resolution images, videos, and audio-stories directly from the Instagram feed, reels, and stories.
 // @author       Xiv
 // @match        *://*.instagram.com/*
@@ -1048,7 +1048,11 @@
             medias.forEach(media => {
                 if (!this.isValidMedia(media)) return;
 
-                if (window.location.pathname.includes('/reel') && !media.closest('article, [role="dialog"]')) {
+                const path = window.location.pathname;
+                const isInfiniteReels = path === '/reels' || path.startsWith('/reels/');
+
+                // Yield solely to processReels if we are in the infinite scroll feed and NOT in a modal dialog
+                if (isInfiniteReels && !media.closest('article, [role="dialog"]')) {
                     return;
                 }
 
@@ -1144,7 +1148,10 @@
         },
 
         processReels() {
-            if (!window.location.pathname.includes('/reel')) return;
+            const path = window.location.pathname;
+            const isInfiniteReels = path === '/reels' || path.startsWith('/reels/');
+            if (!isInfiniteReels) return;
+
             const actionIcons = document.querySelectorAll('svg[aria-label="Share Post"], svg[aria-label="Share"], svg[aria-label="Comment"]');
 
             actionIcons.forEach(svg => {
