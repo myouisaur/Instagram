@@ -2,11 +2,10 @@
 // @name         [Instagram] Viewed Post Marker
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://www.instagram.com/favicon.ico
-// @version      4.0
+// @version      4.10
 // @description  Manually mark Instagram posts as seen with silent cross-device synchronization.
 // @author       Xiv
 // @match        *://*.instagram.com/*
-// @noframes
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_deleteValue
@@ -17,6 +16,7 @@
 // @connect      raw.githubusercontent.com
 // @connect      *
 // @run-at       document-end
+// @noframes
 // @updateURL    https://myouisaur.github.io/Instagram/viewed-post-marker.user.js
 // @downloadURL  https://myouisaur.github.io/Instagram/viewed-post-marker.user.js
 // ==/UserScript==
@@ -25,8 +25,8 @@
     'use strict';
 
     // Guard against duplicate initialization in SPA environments
-    if (window.__tmIgTrackerInitialized) return;
-    window.__tmIgTrackerInitialized = true;
+    if (window.xivInitialized) return;
+    window.xivInitialized = true;
 
     // =========================================================
     // CONFIGURATION
@@ -40,25 +40,39 @@
     };
 
     const CONFIG = {
-        UI_PREFIX: 'tm-ig-seen',
-        STORAGE_KEY: 'tm_ig_seen_data_v3',
-        TOKEN_KEY: 'tm_ig_github_token',
-        DIRTY_KEY: 'tm_ig_sync_dirty',
-        LAST_FETCH_KEY: 'tm_ig_last_fetch',
-        MUTEX_KEY: 'tm_ig_global_mutex',
-        SYNC_LOCK_KEY: 'tm_ig_cloud_sync_lock',
+        // --- Identifiers & Namespaces ---
+        UI_PREFIX: 'xiv-ig-seen',
+        STORAGE_KEY: 'xiv_ig_seen_data_v3',
+        TOKEN_KEY: 'xiv_ig_github_token',
+        DIRTY_KEY: 'xiv_ig_sync_dirty',
+        LAST_FETCH_KEY: 'xiv_ig_last_fetch',
+        MUTEX_KEY: 'xiv_ig_global_mutex',
+        SYNC_LOCK_KEY: 'xiv_ig_cloud_sync_lock',
+
+        // --- Legacy Migration Keys ---
+        LEGACY_TM_STORAGE_KEY: 'tm_ig_seen_data_v3',
+        LEGACY_TM_TOKEN_KEY: 'tm_ig_github_token',
+        LEGACY_V2_STORAGE_KEY: 'tm_ig_seen_data_v2',
+
+        // --- Timing ---
         OBSERVER_DEBOUNCE_MS: 150,
+        ROUTER_SETTLE_DELAY_MS: 250,
         CLOUD_HISTORY_THROTTLE_MS: 10000,
         CLOUD_FOCUS_THROTTLE_MS: 2000,
         CLOUD_REQUEST_TIMEOUT_MS: 15000,
         CLOUD_RATE_LIMIT_BACKOFF_MS: 60 * 60 * 1000,
         CLOUD_PUSH_RETRY_LIMIT: 3,
-        LEGACY_STORAGE_KEY: 'tm_ig_seen_data_v2',
 
         // --- Visual Settings ---
         CHECKMARK_SIZE: '7.5rem',
         CHECKMARK_COLOR: '#4ade80',
-        OVERLAY_DIM_OPACITY: 0.50
+        OVERLAY_DIM_OPACITY: 0.50,
+
+        // --- Post Expansion (Single-Post Permalink Pages Only) ---
+        POST_EXPAND_MIN_HEIGHT: '600px',
+        POST_EXPAND_PREFERRED_HEIGHT: '88vh',
+        POST_EXPAND_MAX_HEIGHT: '1300px',
+        POST_EXPAND_MIN_OVERFLOW_PX: 20
     };
 
     const ICONS = {
@@ -93,7 +107,8 @@
 
         extractShortcode(url) {
             if (!url) return null;
-            const match = url.match(/\/(?:p|reel)\/([a-zA-Z0-9_-]+)/);
+            // Strictly extract the shortcode, rejecting sub-paths like /liked_by/ or /comments/
+            const match = url.match(/\/(?:p|reel)\/([a-zA-Z0-9_-]+)\/?(?:[\?#].*)?$/);
             return match ? match[1] : null;
         }
     };
@@ -127,7 +142,6 @@
             const newToken = window.prompt('[Instagram Viewed Post Marker]\n\nEnter your GitHub Personal Access Token to enable cloud sync:\n\n(Leave blank to remove your token)', currentToken);
             if (newToken !== null) {
                 const trimmedToken = newToken.trim();
-                // User intentionally cleared the prompt
                 if (trimmedToken === '') {
                     GM_setValue(CONFIG.TOKEN_KEY, '');
                     UI.showAuthToast('GitHub Token removed. Sync disabled.', 'error');
@@ -165,7 +179,6 @@
                     return reject(new Error('GitHub API is currently rate limited.'));
                 }
 
-                // Append timestamp to bypass aggressive browser GET caching
                 const cacheBusterUrl = `${CLOUD_CONFIG.WORKER_URL}?t=${Date.now()}`;
 
                 GM_xmlhttpRequest({
@@ -242,12 +255,151 @@
     // PAGE CONTEXT MODULE
     // =========================================================
     const PageContext = {
-        isProfilePage() {
+        shouldScanGrid() {
             const path = window.location.pathname;
             const excluded = ['/', '/explore', '/reels', '/direct', '/stories', '/accounts'];
             if (excluded.some(p => path === p || path.startsWith(p + '/'))) return false;
-            if (/^\/(p|reel)\//.test(path)) return false;
             return true;
+        },
+
+        isSinglePostPermalink() {
+            return /^\/(?:[^/]+\/)?p\/[a-zA-Z0-9_-]+\/?$/.test(window.location.pathname)
+                || /^\/[^/]+\/reel\/[a-zA-Z0-9_-]+\/?$/.test(window.location.pathname);
+        }
+    };
+
+    // =========================================================
+    // POST EXPANDER MODULE (Single-Post Permalink Pages Only)
+    // =========================================================
+    const PostExpander = {
+        apply(rightPanel) {
+            try {
+                if (!PageContext.isSinglePostPermalink()) return;
+                if (rightPanel.closest('[role="dialog"]')) return; // never touch the modal
+                if (rightPanel.dataset.xivExpanded === 'true') return; // idempotent
+
+                const row = rightPanel.parentElement;
+                const wrapper = row ? row.parentElement : null;
+                if (!row || !wrapper) {
+                    console.warn('[IG Tracker][PostExpander] Could not locate post row/wrapper. Skipping expansion.');
+                    return;
+                }
+
+                const leftPanel = Array.from(row.children).find(child => child !== rightPanel);
+
+                wrapper.classList.add(`${CONFIG.UI_PREFIX}-post-wrapper`);
+                row.classList.add(`${CONFIG.UI_PREFIX}-post-row`);
+
+                if (leftPanel) {
+                    leftPanel.classList.add(`${CONFIG.UI_PREFIX}-left-panel`);
+                }
+
+                rightPanel.dataset.xivExpanded = 'true';
+
+                requestAnimationFrame(() => {
+                    this.expandCommentScrollArea(rightPanel);
+
+                    // Allow the browser layout engine to paint the new flex dimensions,
+                    // then trigger a native resize event so Instagram's React engine
+                    // recalculates the aspect-ratio limits and carousel widths dynamically.
+                    setTimeout(() => {
+                        window.dispatchEvent(new Event('resize'));
+                    }, 50);
+                });
+            } catch (e) {
+                console.warn('[IG Tracker][PostExpander] Failed to expand post height/width:', e);
+            }
+        },
+
+        expandCommentScrollArea(rightPanel) {
+            try {
+                let target = null;
+                let maxOverflow = CONFIG.POST_EXPAND_MIN_OVERFLOW_PX;
+
+                Array.from(rightPanel.children).forEach(child => {
+                    const overflow = child.scrollHeight - child.clientHeight;
+                    if (overflow > maxOverflow) {
+                        maxOverflow = overflow;
+                        target = child;
+                    }
+                });
+
+                if (target) {
+                    target.classList.add(`${CONFIG.UI_PREFIX}-comment-scroll`);
+                }
+            } catch (e) {
+                console.warn('[IG Tracker][PostExpander] Failed to enhance comment scroll area:', e);
+            }
+        },
+
+        teardown() {
+            try {
+                document.querySelectorAll(`.${CONFIG.UI_PREFIX}-post-wrapper`).forEach(el => {
+                    el.classList.remove(`${CONFIG.UI_PREFIX}-post-wrapper`);
+                });
+                document.querySelectorAll(`.${CONFIG.UI_PREFIX}-post-row`).forEach(el => {
+                    el.classList.remove(`${CONFIG.UI_PREFIX}-post-row`);
+                });
+                document.querySelectorAll(`.${CONFIG.UI_PREFIX}-left-panel`).forEach(el => {
+                    el.classList.remove(`${CONFIG.UI_PREFIX}-left-panel`);
+                });
+                document.querySelectorAll(`.${CONFIG.UI_PREFIX}-comment-scroll`).forEach(el => {
+                    el.classList.remove(`${CONFIG.UI_PREFIX}-comment-scroll`);
+                });
+                document.querySelectorAll(`.${CONFIG.UI_PREFIX}-right-panel`).forEach(el => {
+                    delete el.dataset.xivExpanded;
+                });
+            } catch (e) {
+                console.warn('[IG Tracker][PostExpander] Teardown failed:', e);
+            }
+        }
+    };
+
+    // =========================================================
+    // ROUTER MODULE (SPA Navigation Detection)
+    // =========================================================
+    const Router = {
+        currentPath: window.location.pathname,
+        settleTimer: null,
+
+        init() {
+            try {
+                this.patchHistoryMethod('pushState');
+                this.patchHistoryMethod('replaceState');
+                window.addEventListener('popstate', () => this.handleChange());
+            } catch (e) {
+                console.warn('[IG Tracker][Router] Failed to initialize navigation detection:', e);
+            }
+        },
+
+        patchHistoryMethod(methodName) {
+            const original = history[methodName];
+            if (typeof original !== 'function') return;
+
+            history[methodName] = function (...args) {
+                const result = original.apply(this, args);
+                Router.handleChange();
+                return result;
+            };
+        },
+
+        handleChange() {
+            const newPath = window.location.pathname;
+            if (newPath === this.currentPath) return;
+            this.currentPath = newPath;
+
+            clearTimeout(this.settleTimer);
+            this.settleTimer = setTimeout(() => this.onNavigate(), CONFIG.ROUTER_SETTLE_DELAY_MS);
+        },
+
+        onNavigate() {
+            try {
+                PostExpander.teardown();
+                App.resetActionBarMarkers();
+                requestAnimationFrame(() => App.scanAll());
+            } catch (e) {
+                console.warn('[IG Tracker][Router] Navigation handling failed:', e);
+            }
         }
     };
 
@@ -260,15 +412,29 @@
         _taskQueue: Promise.resolve(),
 
         async init() {
+            this.migrateLegacyNamespaces();
             this.loadLocal();
             this.setupCrossTabSync();
             this.setupDirtyListener();
 
-            // Validate token visually on load
             if (!CloudAPI.getToken()) {
                 UI.showAuthToast('GitHub Sync: Token missing. Click to add.', 'error');
             } else {
                 this.fetchCloudBackground(true);
+            }
+        },
+
+        migrateLegacyNamespaces() {
+            const oldToken = GM_getValue(CONFIG.LEGACY_TM_TOKEN_KEY, null);
+            if (oldToken && !GM_getValue(CONFIG.TOKEN_KEY, null)) {
+                GM_setValue(CONFIG.TOKEN_KEY, oldToken);
+                this.cleanupLegacyKey(CONFIG.LEGACY_TM_TOKEN_KEY);
+            }
+
+            const oldData = GM_getValue(CONFIG.LEGACY_TM_STORAGE_KEY, null);
+            if (oldData && !GM_getValue(CONFIG.STORAGE_KEY, null)) {
+                GM_setValue(CONFIG.STORAGE_KEY, oldData);
+                this.cleanupLegacyKey(CONFIG.LEGACY_TM_STORAGE_KEY);
             }
         },
 
@@ -339,25 +505,22 @@
             const lastFetch = GM_getValue(CONFIG.LAST_FETCH_KEY, 0);
             const isDirty = GM_getValue(CONFIG.DIRTY_KEY, false);
 
-            // Bypasses throttle ONLY if forced, OR if there are offline changes waiting to be synced
             if (!force && !isDirty) {
                 if (isFocusEvent && (now - lastFetch < CONFIG.CLOUD_FOCUS_THROTTLE_MS)) return;
                 if (!isFocusEvent && (now - lastFetch < CONFIG.CLOUD_HISTORY_THROTTLE_MS)) return;
             }
 
-            // Log fetch time to local storage so multiple tabs share the same throttle limit
             GM_setValue(CONFIG.LAST_FETCH_KEY, now);
 
             try {
                 const cloudData = await CloudAPI.fetch();
                 if (cloudData && Object.keys(cloudData).length > 0) {
                     await this._queueTask(() => this._withLock(async () => {
-                        this.loadLocal(); // Refresh to latest local state before merging
+                        this.loadLocal();
                         this.mergeData(cloudData);
                     }));
                 }
 
-                // Retroactive Safety: If local changes previously failed to push, push them now
                 if (isDirty) {
                     await this.pushToCloud();
                 }
@@ -368,11 +531,11 @@
 
         loadLocal() {
             try {
-                const rawV3 = GM_getValue(CONFIG.STORAGE_KEY, null);
-                if (rawV3) {
-                    this.data = JSON.parse(rawV3);
+                const rawData = GM_getValue(CONFIG.STORAGE_KEY, null);
+                if (rawData) {
+                    this.data = JSON.parse(rawData);
                 } else {
-                    this.migrateFromLegacy();
+                    this.migrateFromV2Legacy();
                 }
             } catch (e) {
                 console.warn(`[IG Tracker] Corrupted storage. Resetting database.`);
@@ -380,22 +543,25 @@
             }
         },
 
-        migrateFromLegacy() {
-            const rawV2 = GM_getValue(CONFIG.LEGACY_STORAGE_KEY, '[]');
-            const dataV2 = JSON.parse(rawV2);
-            const migrated = {};
-            const now = Date.now();
+        migrateFromV2Legacy() {
+            const rawV2 = GM_getValue(CONFIG.LEGACY_V2_STORAGE_KEY, null);
+            if (!rawV2) return;
 
-            dataV2.forEach(shortcode => {
-                migrated[shortcode] = { s: true, t: now };
-            });
+            try {
+                const dataV2 = JSON.parse(rawV2);
+                const migrated = {};
+                const now = Date.now();
 
-            this.data = migrated;
+                dataV2.forEach(shortcode => {
+                    migrated[shortcode] = { s: true, t: now };
+                });
 
-            // Write synchronously (not the debounced saveLocal) so the new schema is
-            // durably persisted before the old key it was migrated from is removed.
-            GM_setValue(CONFIG.STORAGE_KEY, JSON.stringify(this.data));
-            this.cleanupLegacyKey(CONFIG.LEGACY_STORAGE_KEY);
+                this.data = migrated;
+                GM_setValue(CONFIG.STORAGE_KEY, JSON.stringify(this.data));
+                this.cleanupLegacyKey(CONFIG.LEGACY_V2_STORAGE_KEY);
+            } catch(e) {
+                console.warn(`[IG Tracker] V2 legacy migration failed:`, e);
+            }
         },
 
         cleanupLegacyKey(key) {
@@ -409,7 +575,6 @@
         },
 
         saveLocal() {
-            // UNBLOCKING MAIN THREAD: Defers the heavy JSON stringify to prevent UI micro-stutters
             setTimeout(() => {
                 GM_setValue(CONFIG.STORAGE_KEY, JSON.stringify(this.data));
             }, 0);
@@ -421,12 +586,10 @@
             for (const [shortcode, remoteState] of Object.entries(remoteData)) {
                 const localState = this.data[shortcode];
 
-                // Timestamp Supremacy: Always accept the newest action
                 if (!localState || remoteState.t > localState.t) {
                     this.data[shortcode] = remoteState;
                     changed = true;
 
-                    // Immediately update UI for the changed elements
                     document.dispatchEvent(new CustomEvent(`${CONFIG.UI_PREFIX}-sync`, {
                         detail: { shortcode, isSeen: remoteState.s }
                     }));
@@ -458,10 +621,8 @@
             const syncLockKey = CONFIG.SYNC_LOCK_KEY;
             let shouldUpload = false;
 
-            // Elect a Leader Tab using Mutex
             await this._withLock(async () => {
                 if (Date.now() - GM_getValue(syncLockKey, 0) < 5000) {
-                    // Another tab is actively handling the upload
                     GM_setValue(CONFIG.DIRTY_KEY, true);
                     shouldUpload = false;
                 } else {
@@ -480,20 +641,16 @@
                 while (pushing && loops < CONFIG.CLOUD_PUSH_RETRY_LIMIT) {
                     loops++;
 
-                    // PULL-MERGE-PUSH TRANSACTION INSIDE LOCK QUEUE
                     const latestCloudData = await CloudAPI.fetch();
                     await this._queueTask(() => this._withLock(async () => {
-                        this.loadLocal(); // Get latest offline data from all cross-tabs
+                        this.loadLocal();
                         if (latestCloudData && Object.keys(latestCloudData).length > 0) {
-                            this.mergeData(latestCloudData); // Resolves multi-device conflicts instantly
+                            this.mergeData(latestCloudData);
                         }
                     }));
 
-                    // Push combined master dataset
                     await CloudAPI.put(CLOUD_CONFIG.PATH, this.data);
 
-                    // Converge immediately if new local changes landed mid-upload,
-                    // instead of waiting for the next external trigger to retry
                     await this._withLock(async () => {
                         if (!GM_getValue(CONFIG.DIRTY_KEY, false)) {
                             pushing = false;
@@ -504,7 +661,6 @@
                     });
                 }
 
-                // Release Locks
                 await this._withLock(async () => {
                     GM_setValue(syncLockKey, 0);
                 });
@@ -513,7 +669,7 @@
             } catch (e) {
                 await this._withLock(async () => {
                     GM_setValue(syncLockKey, 0);
-                    GM_setValue(CONFIG.DIRTY_KEY, true); // Re-flag for retroactive sync
+                    GM_setValue(CONFIG.DIRTY_KEY, true);
                 });
                 console.error(`[IG Tracker] Cloud push failed (will retry automatically):`, e);
                 throw e;
@@ -524,15 +680,12 @@
             const currentState = this.data[shortcode]?.s || false;
             const newState = !currentState;
 
-            // 1. Instantly update memory
             this.data[shortcode] = { s: newState, t: Date.now() };
 
-            // 2. Instantly update UI for zero lag
             document.dispatchEvent(new CustomEvent(`${CONFIG.UI_PREFIX}-sync`, {
                 detail: { shortcode, isSeen: newState }
             }));
 
-            // 3. Defer local DB write & Tag network as dirty so background loops know to push
             this.saveLocal();
             GM_setValue(CONFIG.DIRTY_KEY, true);
 
@@ -623,6 +776,7 @@
                     color: inherit;
                     height: 40px;
                     width: 40px;
+                    flex-shrink: 0; /* Ensures the button never gets squished */
                     box-sizing: border-box;
                     align-self: center;
                     transition: transform 0.15s ease;
@@ -631,6 +785,74 @@
                 }
                 .${CONFIG.UI_PREFIX}-action-btn:active {
                     transform: scale(0.9);
+                }
+
+                /* ----------------- RESPONSIVE LAYOUT FIXES ----------------- */
+                .${CONFIG.UI_PREFIX}-action-section {
+                    column-gap: 4px !important;
+                }
+
+                /* ----------------- POST EXPANSION (single-post permalink pages only) ----------------- */
+
+                /* Completely eliminate the hardcoded 815px wrapper limits */
+                .${CONFIG.UI_PREFIX}-post-wrapper {
+                    height: clamp(${CONFIG.POST_EXPAND_MIN_HEIGHT}, ${CONFIG.POST_EXPAND_PREFERRED_HEIGHT}, ${CONFIG.POST_EXPAND_MAX_HEIGHT}) !important;
+                    max-height: none !important;
+                    max-width: 100% !important;
+                    width: 100% !important;
+                }
+
+                .${CONFIG.UI_PREFIX}-post-row {
+                    height: 100% !important;
+                    width: 100% !important;
+                    max-width: 100% !important;
+                    align-items: stretch !important;
+                }
+
+                /* ---- DYNAMIC MEDIA PANEL (Left Side) ---- */
+                .${CONFIG.UI_PREFIX}-left-panel {
+                    flex: 1 1 0 !important; /* Grow infinitely to fill remaining space minus sidebar */
+                    min-width: 0 !important;
+                    height: 100% !important;
+                    display: flex !important;
+                    align-items: center !important;
+                    justify-content: center !important;
+                    background: #000 !important;
+                }
+
+                /* Ensure the immediate internal container is ready for scaling */
+                .${CONFIG.UI_PREFIX}-left-panel > div {
+                    display: flex !important;
+                    align-items: center !important;
+                    justify-content: center !important;
+                    width: 100% !important;
+                    height: 100% !important;
+                }
+
+                .${CONFIG.UI_PREFIX}-left-panel img,
+                .${CONFIG.UI_PREFIX}-left-panel video {
+                    object-fit: contain !important;
+                }
+
+                /* ---- STRICTLY PROTECT THE COMMENT SECTION (Right Panel) ---- */
+                @media (min-width: 768px) {
+                    .${CONFIG.UI_PREFIX}-right-panel {
+                        width: fit-content !important; /* Let content dictate width naturally */
+                        min-width: 335px !important;
+                        max-width: 385px !important;
+                        flex: 0 0 auto !important; /* Do not shrink, do not grow beyond limits. Fixes the squish bug. */
+                        height: 100% !important;
+                        display: flex !important;
+                        flex-direction: column !important;
+                        overflow: hidden !important;
+                        transition: width 0.2s ease, max-width 0.2s ease;
+                    }
+                }
+
+                .${CONFIG.UI_PREFIX}-comment-scroll {
+                    flex: 1 1 auto !important;
+                    min-height: 0 !important;
+                    overflow-y: auto !important;
                 }
 
                 /* ----------------- TOAST STYLES ----------------- */
@@ -653,7 +875,7 @@
                     gap: 1.5rem;
                     z-index: 999999;
                     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-                    animation: tmToastFadeIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+                    animation: xivToastFadeIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
                     transition: background 0.2s;
                 }
                 .${CONFIG.UI_PREFIX}-toast.error {
@@ -688,11 +910,11 @@
                 .${CONFIG.UI_PREFIX}-toast button:hover {
                     color: #fff;
                 }
-                @keyframes tmToastFadeIn {
+                @keyframes xivToastFadeIn {
                     from { opacity: 0; transform: translateX(20px) scale(0.95); }
                     to { opacity: 1; transform: translateX(0) scale(1); }
                 }
-                @keyframes tmToastFadeOut {
+                @keyframes xivToastFadeOut {
                     from { opacity: 1; transform: translateX(0) scale(1); }
                     to { opacity: 0; transform: translateX(20px) scale(0.95); }
                 }
@@ -768,7 +990,7 @@
                     toast.remove();
                     return;
                 }
-                toast.style.animation = 'tmToastFadeOut 0.3s forwards';
+                toast.style.animation = 'xivToastFadeOut 0.3s forwards';
                 setTimeout(() => {
                     if (toast.parentNode) toast.remove();
                 }, 300);
@@ -857,23 +1079,20 @@
         observer: null,
 
         start() {
+            Router.init();
             this.bindEvents();
             this.startScanner();
         },
 
         bindEvents() {
-            // Smart Tab-Switching: Checks for fresh data when you return to Instagram
             document.addEventListener('visibilitychange', () => {
                 if (document.visibilityState === 'visible') {
-                    // force = false, isFocusEvent = true
                     Storage.fetchCloudBackground(false, true);
                 }
             });
 
-            // Background Idle Polling
             setInterval(() => {
                 if (document.visibilityState === 'visible') {
-                    // force = false, isFocusEvent = false
                     Storage.fetchCloudBackground(false, false);
                 }
             }, CONFIG.CLOUD_HISTORY_THROTTLE_MS);
@@ -896,16 +1115,22 @@
             this.scanActionBar();
         },
 
-        scanGrid() {
-            if (!PageContext.isProfilePage()) return;
-            const links = document.querySelectorAll(`a[href*="/p/"]:not(.${CONFIG.UI_PREFIX}-processed), a[href*="/reel/"]:not(.${CONFIG.UI_PREFIX}-processed)`);
+        resetActionBarMarkers() {
+            try {
+                document.querySelectorAll(`svg[aria-label="Save"].${CONFIG.UI_PREFIX}-processed, svg[aria-label="Remove"].${CONFIG.UI_PREFIX}-processed`)
+                    .forEach(svg => svg.classList.remove(`${CONFIG.UI_PREFIX}-processed`));
+            } catch (e) {
+                console.warn('[IG Tracker][App] Failed to reset action bar markers:', e);
+            }
+        },
 
-            // Check if we are currently viewing the profile's reels tab specifically
+        scanGrid() {
+            if (!PageContext.shouldScanGrid()) return;
+
+            const links = document.querySelectorAll(`a[href*="/p/"]:not(.${CONFIG.UI_PREFIX}-processed), a[href*="/reel/"]:not(.${CONFIG.UI_PREFIX}-processed)`);
             const isProfileReelsTab = /^\/[^/]+\/reels\/?$/.test(window.location.pathname);
 
             links.forEach(link => {
-                // For standard profile grid tabs, strictly require an image or video tag to be present
-                // before attaching the UI to avoid false positives. Bypass this rule for the Reels tab.
                 if (!isProfileReelsTab && !link.querySelector('img, video')) {
                     link.classList.add(`${CONFIG.UI_PREFIX}-processed`);
                     return;
@@ -916,7 +1141,7 @@
                     link.classList.add(`${CONFIG.UI_PREFIX}-processed`);
                     UI.injectGridUI(link, shortcode);
                 } else {
-                    link.classList.add(`${CONFIG.UI_PREFIX}-processed`); // Prevent infinite processing loops
+                    link.classList.add(`${CONFIG.UI_PREFIX}-processed`);
                 }
             });
         },
@@ -955,13 +1180,36 @@
 
                 if (!anchor) return;
 
-                if (anchor.parentNode && anchor.parentNode.querySelector(`.${CONFIG.UI_PREFIX}-action-btn`)) {
+                const existingBtn = anchor.parentNode && anchor.parentNode.querySelector(`.${CONFIG.UI_PREFIX}-action-btn`);
+                if (existingBtn) {
                     svg.classList.add(`${CONFIG.UI_PREFIX}-processed`);
+                    if (existingBtn.dataset.shortcode !== shortcode) {
+                        existingBtn.dataset.shortcode = shortcode;
+                        UI.renderActionIcon(existingBtn, Storage.has(shortcode), existingBtn.dataset.svgClass || '');
+                    }
                     return;
                 }
 
                 svg.classList.add(`${CONFIG.UI_PREFIX}-processed`);
                 UI.injectActionBarUI(anchor, svg, shortcode);
+
+                // --- Apply Precision Layout Fixes for the Action Bar & Right Panel ---
+                const section = svg.closest('section');
+                if (section) {
+                    section.classList.add(`${CONFIG.UI_PREFIX}-action-section`);
+
+                    let rightPanel = section.closest('.x4h1yfo');
+                    if (!rightPanel) {
+                        const article = section.closest('article');
+                        if (article && article.children.length >= 2) {
+                            rightPanel = article.lastElementChild;
+                        }
+                    }
+                    if (rightPanel) {
+                        rightPanel.classList.add(`${CONFIG.UI_PREFIX}-right-panel`);
+                        PostExpander.apply(rightPanel);
+                    }
+                }
             });
         }
     };
