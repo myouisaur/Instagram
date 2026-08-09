@@ -2,7 +2,7 @@
 // @name         [Instagram] Carousel Indicator
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://www.instagram.com/favicon.ico
-// @version      4.3
+// @version      4.5
 // @description  Adds a native mobile-style position badge to multi-image carousels on the web.
 // @author       Xiv
 // @match        *://*.instagram.com/*
@@ -15,8 +15,8 @@
 (function () {
     'use strict';
 
-    if (window.xivInitialized) return;
-    window.xivInitialized = true;
+    if (window.xivCarouselIndicatorInitialized) return;
+    window.xivCarouselIndicatorInitialized = true;
 
     // ==========================================
     // 1. CONFIGURATION & STATE
@@ -38,6 +38,7 @@
         // Timing
         TIMING: {
             DEBOUNCE_MS: 200,
+            DEBOUNCE_MAX_WAIT_MS: 400,
             HYDRATION_DELAY_MS: 300,
             TRANSITION_DELAY_MS: 150,
             HYDRATION_CHECKS: [100, 400, 800]
@@ -59,7 +60,8 @@
 
     const State = {
         mainObserver: null,
-        debounceTimer: null
+        debounceTimer: null,
+        pendingSince: null
     };
 
     // ==========================================
@@ -261,15 +263,30 @@
     // ==========================================
 
     const CarouselManager = {
-        initPost(rootElement) {
+        initPost(rootElement, attempt = 0) {
             if (processedContainers.has(rootElement)) return;
 
             const dotsContainer = Extractor.findDotsContainer(rootElement);
-            if (!dotsContainer) return;
+            if (!dotsContainer) {
+                // Dots may not be hydrated yet — common for modals opened via SPA navigation,
+                // which render a shell before the carousel content populates a beat later.
+                // Retry on the same staggered schedule already used for initial page-load
+                // hydration, instead of relying on some unrelated future DOM mutation to
+                // happen to re-trigger a global rescan (this was the modal-specific delay).
+                log(`initPost: no dots container found (attempt ${attempt})`);
+                if (attempt < CONFIG.TIMING.HYDRATION_CHECKS.length) {
+                    setTimeout(
+                        () => this.initPost(rootElement, attempt + 1),
+                        CONFIG.TIMING.HYDRATION_CHECKS[attempt]
+                    );
+                }
+                return;
+            }
 
             const mediaContainer = Extractor.getMediaContainer(dotsContainer, rootElement);
             if (!mediaContainer || mediaContainer.querySelector(`.${CONFIG.CLASSES.BADGE}`)) return;
 
+            log(`initPost: badge created on attempt ${attempt}`);
             processedContainers.set(rootElement, true);
 
             const style = window.getComputedStyle(mediaContainer);
@@ -342,7 +359,7 @@
             });
 
             dotObserver.observe(dotsContainer, { attributes: true, childList: true, subtree: true, attributeFilter: ['class', 'style'] });
-            log('Initialized carousel instance v4.3');
+            log('Initialized carousel instance v4.5');
         }
     };
 
@@ -363,14 +380,27 @@
 
         processDOM() {
             const posts = document.querySelectorAll(CONFIG.SELECTORS.POST_CONTAINERS);
+            log(`processDOM: scanning ${posts.length} candidate container(s)`);
             posts.forEach(post => CarouselManager.initPost(post));
         },
 
         requestUpdate() {
+            const now = Date.now();
+            if (!State.pendingSince) State.pendingSince = now;
+
             if (State.debounceTimer) clearTimeout(State.debounceTimer);
+
+            // Under continuous DOM churn (e.g. a modal's comments still streaming in), every
+            // mutation resets the trailing debounce, which could otherwise delay processDOM()
+            // indefinitely until the churn happens to pause. Force an immediate run once we've
+            // been waiting too long, so detection latency stays bounded regardless of context.
+            const elapsed = now - State.pendingSince;
+            const delay = elapsed >= CONFIG.TIMING.DEBOUNCE_MAX_WAIT_MS ? 0 : CONFIG.TIMING.DEBOUNCE_MS;
+
             State.debounceTimer = setTimeout(() => {
+                State.pendingSince = null;
                 window.requestAnimationFrame(() => this.processDOM());
-            }, CONFIG.TIMING.DEBOUNCE_MS);
+            }, delay);
         },
 
         startObserver() {
@@ -420,6 +450,7 @@
                 if (document.visibilityState === 'hidden') {
                     if (State.mainObserver) State.mainObserver.disconnect();
                     if (State.debounceTimer) clearTimeout(State.debounceTimer);
+                    State.pendingSince = null;
                 } else {
                     this.startObserver();
                     this.requestUpdate();
@@ -433,7 +464,7 @@
                 this.processDOM();
                 this.startObserver();
                 this.setupHooks();
-                log('v4.3 Loaded (URL-Driven Zero Latency)');
+                log('v4.5 Loaded (URL-Driven Zero Latency)');
             });
         }
     };
