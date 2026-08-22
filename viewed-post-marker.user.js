@@ -2,8 +2,8 @@
 // @name         [Instagram] Viewed Post Marker
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://www.instagram.com/favicon.ico
-// @version      4.10
-// @description  Manually mark Instagram posts as seen with silent cross-device synchronization.
+// @version      8.1
+// @description  Manually mark Instagram posts as seen, jump straight to unviewed ones, with silent cross-device synchronization.
 // @author       Xiv
 // @match        *://*.instagram.com/*
 // @grant        GM_setValue
@@ -24,9 +24,11 @@
 (function () {
     'use strict';
 
-    // Guard against duplicate initialization in SPA environments
-    if (window.xivInitialized) return;
-    window.xivInitialized = true;
+    // Guard against duplicate initialization in SPA environments.
+    // Scoped to this script specifically — a generic name here would collide with any other
+    // userscript that happens to use the same flag (this has happened in practice).
+    if (window.xivIgSeenPostMarkerInitialized) return;
+    window.xivIgSeenPostMarkerInitialized = true;
 
     // =========================================================
     // CONFIGURATION
@@ -72,12 +74,26 @@
         POST_EXPAND_MIN_HEIGHT: '600px',
         POST_EXPAND_PREFERRED_HEIGHT: '88vh',
         POST_EXPAND_MAX_HEIGHT: '1300px',
-        POST_EXPAND_MIN_OVERFLOW_PX: 20
+        POST_EXPAND_MIN_OVERFLOW_PX: 20,
+
+        // --- Unviewed Post Navigator ---
+        NAV_EXTEND_STEP_WAIT_MS: 1000,
+        // Escalating wait durations tried, in order, when a scroll step shows no growth yet —
+        // each stage is a longer grace window than the last before the step is finally trusted
+        // as a genuine "no growth" reading. A single fixed timeout (even a generous one) has a
+        // breaking point on a slow enough connection; an escalating sequence degrades instead of
+        // failing outright. Tune by editing this array — no code changes needed.
+        NAV_EXTEND_GRACE_WAIT_STAGES_MS: [250, 500, 1250],
+        NAV_EXTEND_DEAD_END_THRESHOLD: 3,
+        NAV_END_MESSAGE_DURATION_MS: 2000,
+        NAV_CONFIRM_ANCHOR_MAX_STEPS: 5
     };
 
     const ICONS = {
         eye: "M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z",
-        check: "M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"
+        check: "M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z",
+        chevronLeft: "M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z",
+        chevronRight: "M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z"
     };
 
     // =========================================================
@@ -265,6 +281,16 @@
         isSinglePostPermalink() {
             return /^\/(?:[^/]+\/)?p\/[a-zA-Z0-9_-]+\/?$/.test(window.location.pathname)
                 || /^\/[^/]+\/reel\/[a-zA-Z0-9_-]+\/?$/.test(window.location.pathname);
+        },
+
+        // The dedicated "Reels" tab of a profile, e.g. /username/reels/
+        isProfileReelsTab() {
+            return /^\/[^/]+\/reels\/?$/.test(window.location.pathname);
+        },
+
+        // The main "Posts" grid of a profile, e.g. /username/ (root only, not /username/reels/ or /username/tagged/)
+        isProfileMainGrid() {
+            return /^\/[^/]+\/?$/.test(window.location.pathname);
         }
     };
 
@@ -272,6 +298,8 @@
     // POST EXPANDER MODULE (Single-Post Permalink Pages Only)
     // =========================================================
     const PostExpander = {
+        _resizeHandler: null,
+
         apply(rightPanel) {
             try {
                 if (!PageContext.isSinglePostPermalink()) return;
@@ -298,16 +326,60 @@
 
                 requestAnimationFrame(() => {
                     this.expandCommentScrollArea(rightPanel);
+                    this.constrainMediaAspectBoxes(leftPanel);
 
                     // Allow the browser layout engine to paint the new flex dimensions,
                     // then trigger a native resize event so Instagram's React engine
                     // recalculates the aspect-ratio limits and carousel widths dynamically.
                     setTimeout(() => {
                         window.dispatchEvent(new Event('resize'));
+                        this.constrainMediaAspectBoxes(leftPanel);
                     }, 50);
                 });
+
+                if (!this._resizeHandler) {
+                    this._resizeHandler = Utils.debounce(() => {
+                        const panel = document.querySelector(`.${CONFIG.UI_PREFIX}-left-panel`);
+                        if (panel) this.constrainMediaAspectBoxes(panel);
+                    }, 150);
+                    window.addEventListener('resize', this._resizeHandler);
+                }
             } catch (e) {
                 console.warn('[IG Tracker][PostExpander] Failed to expand post height/width:', e);
+            }
+        },
+
+        // Instagram sizes portrait media (Reels especially, ~9:16) via a padding-bottom
+        // percentage box, which derives height FROM width. In this expanded layout the
+        // container's HEIGHT is the actual limiting dimension, so tall media can render taller
+        // than the available space and spill out over the comments column with nothing clipping
+        // it. Rather than fight Instagram's deeply nested internal sizing chain (fragile and
+        // unpredictable through several layers of wrapper divs), this measures the box's true
+        // rendered size and scales it down uniformly if it overflows — works regardless of the
+        // exact internal structure, and is a no-op for media that already fits (typical images).
+        constrainMediaAspectBoxes(leftPanel) {
+            if (!leftPanel) return;
+            try {
+                const availableHeight = leftPanel.clientHeight;
+                if (!availableHeight) return;
+
+                const boxes = leftPanel.querySelectorAll('div[style*="padding-bottom"]');
+                boxes.forEach(box => {
+                    if (!/^\d+(\.\d+)?%$/.test(box.style.paddingBottom)) return;
+
+                    // Reset any previous scale before measuring, so repeated calls (e.g. on
+                    // resize) measure the box's true natural size rather than compounding an
+                    // already-scaled-down value.
+                    box.style.transform = '';
+                    const naturalHeight = box.getBoundingClientRect().height;
+                    if (!naturalHeight || naturalHeight <= availableHeight) return;
+
+                    const scale = availableHeight / naturalHeight;
+                    box.style.transform = `scale(${scale})`;
+                    box.style.transformOrigin = 'center center';
+                });
+            } catch (e) {
+                console.warn('[IG Tracker][PostExpander] Failed to constrain media aspect box:', e);
             }
         },
 
@@ -349,6 +421,11 @@
                 document.querySelectorAll(`.${CONFIG.UI_PREFIX}-right-panel`).forEach(el => {
                     delete el.dataset.xivExpanded;
                 });
+
+                if (this._resizeHandler) {
+                    window.removeEventListener('resize', this._resizeHandler);
+                    this._resizeHandler = null;
+                }
             } catch (e) {
                 console.warn('[IG Tracker][PostExpander] Teardown failed:', e);
             }
@@ -396,6 +473,7 @@
             try {
                 PostExpander.teardown();
                 App.resetActionBarMarkers();
+                Navigator.reset();
                 requestAnimationFrame(() => App.scanAll());
             } catch (e) {
                 console.warn('[IG Tracker][Router] Navigation handling failed:', e);
@@ -818,6 +896,7 @@
                     align-items: center !important;
                     justify-content: center !important;
                     background: #000 !important;
+                    overflow: hidden !important; /* defensive backstop — see PostExpander.constrainMediaAspectBoxes() */
                 }
 
                 /* Ensure the immediate internal container is ready for scaling */
@@ -917,6 +996,88 @@
                 @keyframes xivToastFadeOut {
                     from { opacity: 1; transform: translateX(0) scale(1); }
                     to { opacity: 0; transform: translateX(20px) scale(0.95); }
+                }
+
+                /* ----------------- UNVIEWED POST NAVIGATOR ----------------- */
+                .${CONFIG.UI_PREFIX}-nav-widget {
+                    position: fixed;
+                    top: clamp(0.75rem, 2vh, 1.5rem);
+                    right: clamp(0.75rem, 2vw, 1.5rem);
+                    display: none;
+                    align-items: center;
+                    gap: 0.4rem;
+                    background: rgba(20, 20, 20, 0.9);
+                    backdrop-filter: blur(10px);
+                    border: 1px solid rgba(255, 255, 255, 0.12);
+                    border-radius: 999px;
+                    padding: 0.35rem 0.5rem;
+                    z-index: 999998;
+                    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                }
+                .${CONFIG.UI_PREFIX}-nav-widget.visible {
+                    display: flex;
+                }
+                .${CONFIG.UI_PREFIX}-nav-btn {
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    width: clamp(1.9rem, 4vw, 2.2rem);
+                    height: clamp(1.9rem, 4vw, 2.2rem);
+                    border-radius: 50%;
+                    border: none;
+                    background: rgba(255, 255, 255, 0.08);
+                    cursor: pointer;
+                    transition: background 0.2s ease, transform 0.15s ease;
+                    outline: none;
+                    -webkit-tap-highlight-color: transparent;
+                }
+                .${CONFIG.UI_PREFIX}-nav-btn:hover:not(:disabled) {
+                    background: rgba(255, 255, 255, 0.18);
+                }
+                .${CONFIG.UI_PREFIX}-nav-btn:focus-visible {
+                    box-shadow: 0 0 0 2px #60a5fa;
+                }
+                .${CONFIG.UI_PREFIX}-nav-btn:active:not(:disabled) {
+                    transform: scale(0.9);
+                }
+                .${CONFIG.UI_PREFIX}-nav-btn:disabled {
+                    opacity: 0.35;
+                    cursor: not-allowed;
+                }
+                .${CONFIG.UI_PREFIX}-nav-btn svg {
+                    width: 1.1rem;
+                    height: 1.1rem;
+                    fill: #fff;
+                }
+                .${CONFIG.UI_PREFIX}-nav-btn.spinning svg {
+                    animation: xivNavSpin 0.8s linear infinite;
+                }
+                @keyframes xivNavSpin {
+                    from { transform: rotate(0deg); }
+                    to { transform: rotate(360deg); }
+                }
+                .${CONFIG.UI_PREFIX}-nav-status {
+                    color: #eee;
+                    font-size: 0.78rem;
+                    font-weight: 600;
+                    min-width: 4.5rem;
+                    text-align: center;
+                    white-space: nowrap;
+                    user-select: none;
+                }
+
+                /* Persistent highlight applied to the currently selected unviewed post. Targets the
+                   overlay (not the <a>) so it always paints above the thumbnail image, using an
+                   inset ring that can't be clipped by ancestor overflow rules. Stays until the
+                   navigator moves to a different post or the selection is cleared — no timed fade. */
+                .${CONFIG.UI_PREFIX}-grid-wrapper.${CONFIG.UI_PREFIX}-nav-highlight::before {
+                    content: '';
+                    position: absolute;
+                    inset: 0;
+                    box-shadow: inset 0 0 0 0.3rem #60a5fa;
+                    background: rgba(96, 165, 250, 0.18);
+                    pointer-events: none;
                 }
             `;
             document.head.appendChild(style);
@@ -1073,6 +1234,481 @@
     };
 
     // =========================================================
+    // UNVIEWED POST NAVIGATOR MODULE
+    // =========================================================
+    const Navigator = {
+        cursorShortcode: null,
+        isSearching: false,
+        reachedEnd: false,
+        reachedStart: false,
+        els: {},
+
+        // Append-only record of every grid item ever seen this page/profile, populated passively
+        // as the normal grid scan runs (no separate "scan mode" needed) and extended actively when
+        // Next/Prev can't find anything further and force-scrolls to look for more. Stores the
+        // scroll position each post was first seen at, never the element itself — Instagram can
+        // unmount/remount grid nodes (virtualization), which would leave a cached element silently
+        // detached and unusable later.
+        knownItems: new Map(),
+        // True page-order sequence of shortcodes, maintained independently of knownItems'
+        // insertion order. Insertion order reflects scan time, not page position — scrolling up
+        // from mid-profile would otherwise append the real first posts to the END of the
+        // sequence instead of the front (and symmetrically for scrolling down to the real end).
+        // Merged incrementally in mergeOrder() using each scan's DOM order as ground truth.
+        orderedShortcodes: [],
+        _lastKnownSize: 0,
+
+        // True once the profile's real top/bottom has actually been scrolled to and scanned in
+        // this tab session — NOT the same as reachedEnd/reachedStart, which only mean "no
+        // candidate found among what's currently known." Without this distinction, the very
+        // first Next/Previous press of a session could report "1/N" or "N/N" against whatever
+        // happened to be scanned from a mid-scroll position, mislabeling a middle post as the
+        // true first/last. Resets with the rest of the navigator state on SPA navigation or
+        // page refresh — deliberately in-memory only, never persisted.
+        hasConfirmedStart: false,
+        hasConfirmedEnd: false,
+
+        _highlightedEl: null,
+        _endMessageTimer: null,
+
+        init() {
+            if (document.getElementById(`${CONFIG.UI_PREFIX}-nav-widget`)) return; // duplicate-init guard
+            this.injectWidget();
+            this.bindEvents();
+            this.render();
+        },
+
+        injectWidget() {
+            const widget = document.createElement('div');
+            widget.id = `${CONFIG.UI_PREFIX}-nav-widget`;
+            widget.className = `${CONFIG.UI_PREFIX}-nav-widget`;
+
+            const prevBtn = document.createElement('button');
+            prevBtn.className = `${CONFIG.UI_PREFIX}-nav-btn`;
+            prevBtn.title = 'Previous unviewed post';
+            prevBtn.setAttribute('aria-label', 'Previous unviewed post');
+            prevBtn.appendChild(Utils.createSVG(ICONS.chevronLeft));
+
+            const status = document.createElement('span');
+            status.className = `${CONFIG.UI_PREFIX}-nav-status`;
+            status.textContent = '';
+
+            const nextBtn = document.createElement('button');
+            nextBtn.className = `${CONFIG.UI_PREFIX}-nav-btn`;
+            nextBtn.title = 'Next unviewed post';
+            nextBtn.setAttribute('aria-label', 'Next unviewed post');
+            nextBtn.appendChild(Utils.createSVG(ICONS.chevronRight));
+
+            widget.appendChild(prevBtn);
+            widget.appendChild(status);
+            widget.appendChild(nextBtn);
+            document.body.appendChild(widget);
+
+            this.els = { widget, prevBtn, nextBtn, status };
+        },
+
+        bindEvents() {
+            this.els.prevBtn.addEventListener('click', () => this.go('prev'));
+            this.els.nextBtn.addEventListener('click', () => this.go('next'));
+        },
+
+        // Called on SPA navigation — a different profile/page means everything known so far is
+        // no longer relevant.
+        reset() {
+            this.cursorShortcode = null;
+            this.reachedEnd = false;
+            this.reachedStart = false;
+            this.hasConfirmedStart = false;
+            this.hasConfirmedEnd = false;
+            this.knownItems.clear();
+            this.orderedShortcodes = [];
+            this._lastKnownSize = 0;
+            this.isSearching = false;
+            this.clearHighlight();
+            clearTimeout(this._endMessageTimer);
+            this.render();
+        },
+
+        // Passively records every processed grid link currently in the DOM. Cheap and safe to call
+        // on every normal grid scan — only new shortcodes are added, existing ones are left alone.
+        // On a profile's main "Posts" grid, cross-posted Reels are excluded — they belong to the
+        // Reels tab, not the grid.
+        recordKnownItems() {
+            if (!PageContext.shouldScanGrid()) return;
+
+            const skipReels = PageContext.isProfileMainGrid() && !PageContext.isProfileReelsTab();
+            const links = document.querySelectorAll(
+                `a.${CONFIG.UI_PREFIX}-processed[href*="/p/"], a.${CONFIG.UI_PREFIX}-processed[href*="/reel/"]`
+            );
+            const currentScrollY = window.scrollY;
+
+            // Every currently-mounted processed link, in true DOM order — a contiguous window
+            // of the real page sequence, regardless of which shortcodes in it are already known.
+            const domOrderWindow = [];
+
+            links.forEach(link => {
+                if (link.closest('[role="dialog"]')) return;
+
+                const href = link.getAttribute('href');
+                if (skipReels && href.includes('/reel/')) return;
+
+                const shortcode = Utils.extractShortcode(href);
+                if (!shortcode) return;
+
+                domOrderWindow.push(shortcode);
+                if (!this.knownItems.has(shortcode)) {
+                    this.knownItems.set(shortcode, { shortcode, scrollY: currentScrollY });
+                }
+            });
+
+            this.mergeOrder(domOrderWindow);
+
+            // New posts becoming known means any prior "nothing more to find" conclusion no
+            // longer holds — clear the stoppers so the next press searches again instead of
+            // failing fast on stale information. A confirmed anchor is invalidated the same
+            // way: if IG's own lazy-loading surfaces posts past a boundary we'd already
+            // confirmed, that confirmation is stale and must be re-earned.
+            if (this.knownItems.size > this._lastKnownSize) {
+                this.reachedEnd = false;
+                this.reachedStart = false;
+                this.hasConfirmedStart = false;
+                this.hasConfirmedEnd = false;
+            }
+            this._lastKnownSize = this.knownItems.size;
+        },
+
+        // Merges one scan's DOM-order window into the master page-order sequence. Only
+        // brand-new shortcodes need positioning — each is inserted immediately after the
+        // nearest preceding shortcode in this same window that's already in the master
+        // sequence (or at the very front if nothing precedes it yet). Because the window is
+        // always contiguous, that neighbor relationship is reliable ground truth even though
+        // knownItems itself may have recorded things in a completely different order.
+        mergeOrder(domOrderWindow) {
+            let insertAfterIndex = -1;
+
+            domOrderWindow.forEach(shortcode => {
+                const existingIndex = this.orderedShortcodes.indexOf(shortcode);
+
+                if (existingIndex !== -1) {
+                    insertAfterIndex = existingIndex;
+                    return;
+                }
+
+                const insertAt = insertAfterIndex + 1;
+                this.orderedShortcodes.splice(insertAt, 0, shortcode);
+                insertAfterIndex = insertAt;
+            });
+        },
+
+        getUnviewedShortcodes() {
+            return this.orderedShortcodes.filter(shortcode => !Storage.has(shortcode));
+        },
+
+        // Establishes ground truth for "position 1" before the first Next press of a session is
+        // allowed to label anything as the first unviewed post. If the tab was already scrolled
+        // mid-profile before the widget was ever used, knownItems would otherwise start from
+        // whatever happened to be on screen — not the real first post. Scrolls up in viewport
+        // steps until the true top is reached, scanning along the way so any posts IG had
+        // virtualized away get remounted and recorded. Bounded by NAV_CONFIRM_ANCHOR_MAX_STEPS
+        // as a circuit breaker against a scroll position that never quite reaches zero.
+        async confirmStart() {
+            if (this.hasConfirmedStart) return;
+
+            let steps = 0;
+            while (window.scrollY > 0 && steps < CONFIG.NAV_CONFIRM_ANCHOR_MAX_STEPS) {
+                window.scrollBy({ top: -window.innerHeight, behavior: 'auto' });
+                await this.waitForSettle();
+                this.recordKnownItems();
+                steps++;
+            }
+
+            if (steps >= CONFIG.NAV_CONFIRM_ANCHOR_MAX_STEPS) {
+                console.warn('[IG Tracker][Navigator] Gave up confirming the true top after reaching the step limit.');
+            }
+
+            this.hasConfirmedStart = true;
+            this.reachedStart = true;
+        },
+
+        // Mirrors confirmStart(): establishes ground truth for "position N/N" before the first
+        // Previous press of a session lands on whatever happens to be the last currently-known
+        // item. Reuses the same growth-stall detection as findNext()'s extend loop, since the
+        // bottom of a profile is only known once IG itself stops lazy-loading more posts.
+        async confirmEnd() {
+            if (this.hasConfirmedEnd) return;
+
+            let consecutiveNoGrowth = 0;
+            let steps = 0;
+
+            while (consecutiveNoGrowth < CONFIG.NAV_EXTEND_DEAD_END_THRESHOLD && steps < CONFIG.NAV_CONFIRM_ANCHOR_MAX_STEPS) {
+                const grew = await this.extendStep(window.innerHeight);
+                consecutiveNoGrowth = grew ? 0 : consecutiveNoGrowth + 1;
+                steps++;
+            }
+
+            if (steps >= CONFIG.NAV_CONFIRM_ANCHOR_MAX_STEPS) {
+                // Cap was hit rather than a genuine end being confirmed (e.g. Instagram's
+                // Suggested Posts section loading indefinitely past the real end of a profile).
+                // Leave both flags false so a later press re-attempts instead of trusting a
+                // conclusion that was never actually earned.
+                console.warn('[IG Tracker][Navigator] Gave up confirming the true end after reaching the step limit — content may be loading indefinitely (e.g. Suggested Posts).');
+                return;
+            }
+
+            this.hasConfirmedEnd = true;
+            this.reachedEnd = true;
+        },
+
+        async go(direction) {
+            if (this.isSearching) return;
+
+            this.isSearching = true;
+            this.setSearchingUI(direction, true);
+            this.render();
+
+            try {
+                // A fresh session (no cursor yet) must not label a post as "1/N" or "N/N" until
+                // the corresponding end of the profile has actually been confirmed — see
+                // confirmStart()/confirmEnd() for why this matters.
+                if (direction === 'next' && !this.cursorShortcode && !this.hasConfirmedStart) {
+                    await this.confirmStart();
+                } else if (direction === 'prev' && !this.cursorShortcode && !this.hasConfirmedEnd) {
+                    await this.confirmEnd();
+                }
+
+                const found = direction === 'next' ? await this.findNext() : await this.findPrev();
+
+                if (found) {
+                    await this.jumpTo(found);
+                } else {
+                    // Dead end confirmed at the current boundary post — deselect instead of
+                    // staying put, so the next press (either direction) starts fresh from the
+                    // first/last unviewed post rather than skipping straight past it.
+                    this.cursorShortcode = null;
+                    this.clearHighlight();
+                    this.showEndMessage(direction === 'next' ? 'No more unviewed' : 'Reached the start');
+                }
+            } catch (e) {
+                console.warn('[IG Tracker][Navigator] Navigation failed:', e);
+            } finally {
+                this.isSearching = false;
+                this.setSearchingUI(direction, false);
+                this.render();
+            }
+        },
+
+        // Looks for the next unviewed post after the cursor among already-known items first;
+        // if none, extends the known set by scrolling down in viewport steps until a new unviewed
+        // post turns up or NAV_EXTEND_DEAD_END_THRESHOLD consecutive steps confirm the real end.
+        async findNext() {
+            let unviewed = this.getUnviewedShortcodes();
+            let cursorIndex = this.cursorShortcode ? unviewed.indexOf(this.cursorShortcode) : -1;
+            let candidate = unviewed[cursorIndex + 1];
+            if (candidate) return candidate;
+
+            // Only the extend-scroll phase gets short-circuited by a prior "confirmed no more"
+            // result — the known-list lookup above always runs fresh, since navigating back
+            // (e.g. via Previous) can put a known-but-unvisited item back within reach.
+            if (this.reachedEnd) return null;
+
+            let consecutiveNoGrowth = 0;
+            let steps = 0;
+
+            // Hard step cap independent of consecutiveNoGrowth: content that keeps "growing"
+            // indefinitely without ever surfacing a candidate (e.g. Instagram's Suggested Posts
+            // section past the real end of a profile, which reuses the same /p/ and /reel/ link
+            // pattern) would otherwise never trip the dead-end threshold, leaving go() stuck
+            // awaiting a promise that never resolves and the nav buttons permanently locked.
+            while (consecutiveNoGrowth < CONFIG.NAV_EXTEND_DEAD_END_THRESHOLD && steps < CONFIG.NAV_CONFIRM_ANCHOR_MAX_STEPS) {
+                const grew = await this.extendStep(window.innerHeight);
+
+                unviewed = this.getUnviewedShortcodes();
+                cursorIndex = this.cursorShortcode ? unviewed.indexOf(this.cursorShortcode) : -1;
+                candidate = unviewed[cursorIndex + 1];
+                if (candidate) return candidate;
+
+                consecutiveNoGrowth = grew ? 0 : consecutiveNoGrowth + 1;
+                steps++;
+            }
+
+            if (steps >= CONFIG.NAV_CONFIRM_ANCHOR_MAX_STEPS) {
+                // Cap was hit rather than a genuine dead end being confirmed — don't latch
+                // reachedEnd, or a later press (e.g. once content settles) would fail fast
+                // against a conclusion that was never actually earned.
+                console.warn('[IG Tracker][Navigator] Gave up looking for the next post after reaching the step limit — content may be loading indefinitely (e.g. Suggested Posts).');
+                return null;
+            }
+
+            this.reachedEnd = true;
+            return null;
+        },
+
+        // Mirrors findNext(): looks backward among known items first, then extends upward by
+        // scrolling in viewport steps. Scrolling up rarely reveals genuinely new posts (Instagram
+        // loads sequentially downward) — this mainly forces Instagram to remount earlier posts
+        // that may have been virtualized away, in case they weren't already known.
+        async findPrev() {
+            let unviewed = this.getUnviewedShortcodes();
+            let cursorIndex = this.cursorShortcode ? unviewed.indexOf(this.cursorShortcode) : -1;
+            let candidate = cursorIndex > 0 ? unviewed[cursorIndex - 1] : (cursorIndex === -1 ? unviewed[unviewed.length - 1] : undefined);
+            if (candidate) return candidate;
+
+            if (this.reachedStart) return null;
+
+            let consecutiveNoGrowth = 0;
+            let steps = 0;
+
+            while (consecutiveNoGrowth < CONFIG.NAV_EXTEND_DEAD_END_THRESHOLD && steps < CONFIG.NAV_CONFIRM_ANCHOR_MAX_STEPS) {
+                if (window.scrollY <= 0) break; // already at the top — nothing more to reveal
+
+                const grew = await this.extendStep(-window.innerHeight);
+
+                unviewed = this.getUnviewedShortcodes();
+                cursorIndex = this.cursorShortcode ? unviewed.indexOf(this.cursorShortcode) : -1;
+                candidate = cursorIndex > 0 ? unviewed[cursorIndex - 1] : (cursorIndex === -1 ? unviewed[unviewed.length - 1] : undefined);
+                if (candidate) return candidate;
+
+                consecutiveNoGrowth = grew ? 0 : consecutiveNoGrowth + 1;
+                steps++;
+            }
+
+            if (steps >= CONFIG.NAV_CONFIRM_ANCHOR_MAX_STEPS) {
+                console.warn('[IG Tracker][Navigator] Gave up looking for the previous post after reaching the step limit.');
+                return null;
+            }
+
+            this.reachedStart = true;
+            return null;
+        },
+
+        // Waits (bounded) for the DOM to settle after a scroll step, then forces an immediate grid
+        // scan so newly loaded posts are tagged right away — avoids racing App's own debounced
+        // observer, which could otherwise report stale results mid-search. Duration is
+        // configurable so callers can grant a longer grace window when a stall is suspected
+        // (see extendStep()) without slowing down the common, fast-loading case.
+        waitForSettle(durationMs = CONFIG.NAV_EXTEND_STEP_WAIT_MS) {
+            return new Promise(resolve => {
+                const container = document.querySelector('main') || document.body;
+                let settled = false;
+
+                const finish = () => {
+                    if (settled) return;
+                    settled = true;
+                    observer.disconnect();
+                    App.scanGrid();
+                    resolve();
+                };
+
+                const observer = new MutationObserver(Utils.debounce(finish, 250));
+                observer.observe(container, { childList: true, subtree: true });
+
+                setTimeout(finish, durationMs);
+            });
+        },
+
+        // Scrolls one viewport step and reports whether knownItems grew as a result. A single
+        // fixed-timeout wait is prone to false "no growth" readings on slow connections — new
+        // posts simply haven't arrived yet — which would make the dead-end threshold trip early
+        // and stop the search mid-profile. So the first no-growth reading isn't trusted
+        // immediately: it's rechecked through an escalating sequence of longer waits
+        // (NAV_EXTEND_GRACE_WAIT_STAGES_MS), returning as soon as any stage shows growth.
+        async extendStep(deltaY) {
+            const beforeSize = this.knownItems.size;
+
+            window.scrollBy({ top: deltaY, behavior: 'auto' });
+
+            for (const stageWaitMs of CONFIG.NAV_EXTEND_GRACE_WAIT_STAGES_MS) {
+                await this.waitForSettle(stageWaitMs);
+                this.recordKnownItems();
+
+                if (this.knownItems.size > beforeSize) return true;
+            }
+
+            return false;
+        },
+
+        // Finds the current, live <a> element for a shortcode. Never trusts a cached element
+        // reference — Instagram can unmount/remount grid nodes (virtualization), which would
+        // leave any element captured earlier silently detached and unusable.
+        findLiveLink(shortcode) {
+            const links = document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]');
+            for (const link of links) {
+                if (Utils.extractShortcode(link.getAttribute('href')) === shortcode) {
+                    return link;
+                }
+            }
+            return null;
+        },
+
+        // Jumps to a post, remounting it first if necessary. If it isn't currently in the DOM,
+        // scrolls to the position it was first seen at to force Instagram to remount that region,
+        // then searches again before giving up.
+        async jumpTo(shortcode) {
+            this.clearHighlight();
+
+            let link = this.findLiveLink(shortcode);
+
+            if (!link) {
+                const known = this.knownItems.get(shortcode);
+                if (known && typeof known.scrollY === 'number') {
+                    window.scrollTo({ top: known.scrollY, behavior: 'auto' });
+                    await this.waitForSettle();
+                    link = this.findLiveLink(shortcode);
+                }
+            }
+
+            if (!link) {
+                console.warn(`[IG Tracker][Navigator] Could not locate post ${shortcode} even after scrolling to its recorded position.`);
+                return;
+            }
+
+            this.cursorShortcode = shortcode;
+            link.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+            const wrapper = link.querySelector(`.${CONFIG.UI_PREFIX}-grid-wrapper`);
+            const target = wrapper || link;
+            target.classList.add(`${CONFIG.UI_PREFIX}-nav-highlight`);
+            this._highlightedEl = target;
+        },
+
+        clearHighlight() {
+            if (!this._highlightedEl) return;
+            this._highlightedEl.classList.remove(`${CONFIG.UI_PREFIX}-nav-highlight`);
+            this._highlightedEl = null;
+        },
+
+        setSearchingUI(direction, isSearching) {
+            const activeBtn = direction === 'next' ? this.els.nextBtn : this.els.prevBtn;
+            activeBtn.classList.toggle('spinning', isSearching);
+        },
+
+        showEndMessage(message) {
+            clearTimeout(this._endMessageTimer);
+            this.els.status.textContent = message;
+            this._endMessageTimer = setTimeout(() => this.render(), CONFIG.NAV_END_MESSAGE_DURATION_MS);
+        },
+
+        render() {
+            try {
+                const isEligiblePage = PageContext.shouldScanGrid();
+                this.els.widget.classList.toggle('visible', isEligiblePage);
+                if (!isEligiblePage) return;
+
+                const unviewed = this.getUnviewedShortcodes();
+                const cursorIndex = this.cursorShortcode ? unviewed.indexOf(this.cursorShortcode) : -1;
+                const position = cursorIndex >= 0 ? cursorIndex + 1 : 0;
+
+                this.els.status.textContent = `${position}/${unviewed.length}`;
+
+                this.els.prevBtn.disabled = this.isSearching;
+                this.els.nextBtn.disabled = this.isSearching;
+            } catch (e) {
+                console.warn('[IG Tracker][Navigator] Failed to render:', e);
+            }
+        }
+    };
+
+    // =========================================================
     // DOM OBSERVER & APP LIFECYCLE
     // =========================================================
     const App = {
@@ -1082,6 +1718,7 @@
             Router.init();
             this.bindEvents();
             this.startScanner();
+            Navigator.init();
         },
 
         bindEvents() {
@@ -1113,6 +1750,8 @@
         scanAll() {
             this.scanGrid();
             this.scanActionBar();
+            Navigator.recordKnownItems();
+            Navigator.render();
         },
 
         resetActionBarMarkers() {
@@ -1128,7 +1767,7 @@
             if (!PageContext.shouldScanGrid()) return;
 
             const links = document.querySelectorAll(`a[href*="/p/"]:not(.${CONFIG.UI_PREFIX}-processed), a[href*="/reel/"]:not(.${CONFIG.UI_PREFIX}-processed)`);
-            const isProfileReelsTab = /^\/[^/]+\/reels\/?$/.test(window.location.pathname);
+            const isProfileReelsTab = PageContext.isProfileReelsTab();
 
             links.forEach(link => {
                 if (!isProfileReelsTab && !link.querySelector('img, video')) {
