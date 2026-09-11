@@ -2,7 +2,7 @@
 // @name         [Instagram] Viewed Post Marker
 // @namespace    https://github.com/myouisaur/Instagram
 // @icon         https://www.instagram.com/favicon.ico
-// @version      8.1
+// @version      8.7
 // @description  Manually mark Instagram posts as seen, jump straight to unviewed ones, with silent cross-device synchronization.
 // @author       Xiv
 // @match        *://*.instagram.com/*
@@ -315,32 +315,27 @@
 
                 const leftPanel = Array.from(row.children).find(child => child !== rightPanel);
 
+                // Capture the media's native aspect ratio BEFORE the row/wrapper are widened —
+                // once expanded, Instagram's own layout no longer reflects its natural size.
+                this.captureAspectRatio(leftPanel);
+
                 wrapper.classList.add(`${CONFIG.UI_PREFIX}-post-wrapper`);
                 row.classList.add(`${CONFIG.UI_PREFIX}-post-row`);
-
-                if (leftPanel) {
-                    leftPanel.classList.add(`${CONFIG.UI_PREFIX}-left-panel`);
-                }
 
                 rightPanel.dataset.xivExpanded = 'true';
 
                 requestAnimationFrame(() => {
                     this.expandCommentScrollArea(rightPanel);
-                    this.constrainMediaAspectBoxes(leftPanel);
-
-                    // Allow the browser layout engine to paint the new flex dimensions,
-                    // then trigger a native resize event so Instagram's React engine
-                    // recalculates the aspect-ratio limits and carousel widths dynamically.
-                    setTimeout(() => {
-                        window.dispatchEvent(new Event('resize'));
-                        this.constrainMediaAspectBoxes(leftPanel);
-                    }, 50);
+                    this.applyMediaSize(leftPanel, row, rightPanel);
                 });
 
                 if (!this._resizeHandler) {
                     this._resizeHandler = Utils.debounce(() => {
-                        const panel = document.querySelector(`.${CONFIG.UI_PREFIX}-left-panel`);
-                        if (panel) this.constrainMediaAspectBoxes(panel);
+                        document.querySelectorAll(`.${CONFIG.UI_PREFIX}-media-sized`).forEach(panel => {
+                            const panelRow = panel.parentElement;
+                            const panelRightPanel = panelRow && Array.from(panelRow.children).find(c => c !== panel);
+                            if (panelRow && panelRightPanel) this.applyMediaSize(panel, panelRow, panelRightPanel);
+                        });
                     }, 150);
                     window.addEventListener('resize', this._resizeHandler);
                 }
@@ -349,37 +344,60 @@
             }
         },
 
-        // Instagram sizes portrait media (Reels especially, ~9:16) via a padding-bottom
-        // percentage box, which derives height FROM width. In this expanded layout the
-        // container's HEIGHT is the actual limiting dimension, so tall media can render taller
-        // than the available space and spill out over the comments column with nothing clipping
-        // it. Rather than fight Instagram's deeply nested internal sizing chain (fragile and
-        // unpredictable through several layers of wrapper divs), this measures the box's true
-        // rendered size and scales it down uniformly if it overflows — works regardless of the
-        // exact internal structure, and is a no-op for media that already fits (typical images).
-        constrainMediaAspectBoxes(leftPanel) {
+        // Captures the media column's native aspect ratio while it's still in Instagram's
+        // unmodified layout — after the row/wrapper are widened, that natural ratio can no
+        // longer be measured directly. A no-op (with a warning) if the panel can't be found or
+        // hasn't rendered yet, so a failed measurement never leaves the media at an arbitrary
+        // computed size later.
+        captureAspectRatio(leftPanel) {
             if (!leftPanel) return;
             try {
-                const availableHeight = leftPanel.clientHeight;
-                if (!availableHeight) return;
+                const rect = leftPanel.getBoundingClientRect();
+                if (!rect.width || !rect.height) {
+                    console.warn('[IG Tracker][PostExpander] Could not measure native media size. Leaving media panel unchanged.');
+                    return;
+                }
 
-                const boxes = leftPanel.querySelectorAll('div[style*="padding-bottom"]');
-                boxes.forEach(box => {
-                    if (!/^\d+(\.\d+)?%$/.test(box.style.paddingBottom)) return;
-
-                    // Reset any previous scale before measuring, so repeated calls (e.g. on
-                    // resize) measure the box's true natural size rather than compounding an
-                    // already-scaled-down value.
-                    box.style.transform = '';
-                    const naturalHeight = box.getBoundingClientRect().height;
-                    if (!naturalHeight || naturalHeight <= availableHeight) return;
-
-                    const scale = availableHeight / naturalHeight;
-                    box.style.transform = `scale(${scale})`;
-                    box.style.transformOrigin = 'center center';
-                });
+                leftPanel.classList.add(`${CONFIG.UI_PREFIX}-media-sized`);
+                leftPanel.dataset.xivAspectRatio = String(rect.width / rect.height);
+                leftPanel.style.setProperty('flex', '0 0 auto', 'important');
+                leftPanel.style.setProperty('align-self', 'center', 'important');
             } catch (e) {
-                console.warn('[IG Tracker][PostExpander] Failed to constrain media aspect box:', e);
+                console.warn('[IG Tracker][PostExpander] Failed to capture media aspect ratio:', e);
+            }
+        },
+
+        // Sizes the media column to fill the available space while preserving its native
+        // aspect ratio — computed directly from the available height/width rather than scaled
+        // up after the fact. This gives Instagram's carousel a real, correctly-proportioned
+        // container to fill (its own resize logic just renders the image to match), instead of
+        // a CSS transform stretched over the top of it — a transform affected the whole
+        // painted subtree, including Instagram's own overlay controls (carousel arrows,
+        // position badge, dot indicators), inflating those along with the photo.
+        applyMediaSize(leftPanel, row, rightPanel) {
+            if (!leftPanel || !row || !rightPanel) return;
+            try {
+                const aspectRatio = parseFloat(leftPanel.dataset.xivAspectRatio);
+                if (!aspectRatio) return;
+
+                const availableHeight = row.clientHeight;
+                const availableWidth = row.clientWidth - rightPanel.getBoundingClientRect().width;
+                if (!availableHeight || !availableWidth) return;
+
+                let targetHeight = availableHeight;
+                let targetWidth = targetHeight * aspectRatio;
+
+                if (targetWidth > availableWidth) {
+                    targetWidth = availableWidth;
+                    targetHeight = targetWidth / aspectRatio;
+                }
+
+                leftPanel.style.setProperty('width', `${targetWidth}px`, 'important');
+                leftPanel.style.setProperty('height', `${targetHeight}px`, 'important');
+                leftPanel.style.setProperty('max-width', `${targetWidth}px`, 'important');
+                leftPanel.style.setProperty('max-height', `${targetHeight}px`, 'important');
+            } catch (e) {
+                console.warn('[IG Tracker][PostExpander] Failed to size media panel:', e);
             }
         },
 
@@ -412,14 +430,21 @@
                 document.querySelectorAll(`.${CONFIG.UI_PREFIX}-post-row`).forEach(el => {
                     el.classList.remove(`${CONFIG.UI_PREFIX}-post-row`);
                 });
-                document.querySelectorAll(`.${CONFIG.UI_PREFIX}-left-panel`).forEach(el => {
-                    el.classList.remove(`${CONFIG.UI_PREFIX}-left-panel`);
-                });
                 document.querySelectorAll(`.${CONFIG.UI_PREFIX}-comment-scroll`).forEach(el => {
                     el.classList.remove(`${CONFIG.UI_PREFIX}-comment-scroll`);
                 });
                 document.querySelectorAll(`.${CONFIG.UI_PREFIX}-right-panel`).forEach(el => {
                     delete el.dataset.xivExpanded;
+                });
+                document.querySelectorAll(`.${CONFIG.UI_PREFIX}-media-sized`).forEach(el => {
+                    el.classList.remove(`${CONFIG.UI_PREFIX}-media-sized`);
+                    el.style.removeProperty('flex');
+                    el.style.removeProperty('align-self');
+                    el.style.removeProperty('width');
+                    el.style.removeProperty('height');
+                    el.style.removeProperty('max-width');
+                    el.style.removeProperty('max-height');
+                    delete el.dataset.xivAspectRatio;
                 });
 
                 if (this._resizeHandler) {
@@ -885,32 +910,12 @@
                     width: 100% !important;
                     max-width: 100% !important;
                     align-items: stretch !important;
-                }
-
-                /* ---- DYNAMIC MEDIA PANEL (Left Side) ---- */
-                .${CONFIG.UI_PREFIX}-left-panel {
-                    flex: 1 1 0 !important; /* Grow infinitely to fill remaining space minus sidebar */
-                    min-width: 0 !important;
-                    height: 100% !important;
-                    display: flex !important;
-                    align-items: center !important;
+                    /* The media column is explicitly sized to fill available space while
+                       keeping its aspect ratio (see PostExpander.applyMediaSize()) — it
+                       doesn't necessarily span the row's full remaining width (height is often
+                       the limiting dimension). Centering the pair keeps them adjacent rather
+                       than pinned to opposite edges with an empty gap between them. */
                     justify-content: center !important;
-                    background: #000 !important;
-                    overflow: hidden !important; /* defensive backstop — see PostExpander.constrainMediaAspectBoxes() */
-                }
-
-                /* Ensure the immediate internal container is ready for scaling */
-                .${CONFIG.UI_PREFIX}-left-panel > div {
-                    display: flex !important;
-                    align-items: center !important;
-                    justify-content: center !important;
-                    width: 100% !important;
-                    height: 100% !important;
-                }
-
-                .${CONFIG.UI_PREFIX}-left-panel img,
-                .${CONFIG.UI_PREFIX}-left-panel video {
-                    object-fit: contain !important;
                 }
 
                 /* ---- STRICTLY PROTECT THE COMMENT SECTION (Right Panel) ---- */
